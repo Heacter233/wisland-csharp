@@ -1,0 +1,140 @@
+<UserControl x:Class="Wisland.Pages.TranslatePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctl="clr-namespace:Wisland.Controls"
+             Width="616" Height="330">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="28"/>
+            <RowDefinition Height="8"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 分段：文本 / 实时字幕 / 单词本 -->
+        <Border Grid.Row="0" HorizontalAlignment="Left" CornerRadius="14" Height="28"
+                Background="{DynamicResource AppCard}" Padding="2">
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="TabText" Content="文本" Style="{StaticResource SegBtn}"
+                             GroupName="TransTab" IsChecked="True" Checked="Tab_Checked" Tag="0"/>
+                <RadioButton x:Name="TabLive" Content="实时字幕" Style="{StaticResource SegBtn}"
+                             GroupName="TransTab" Checked="Tab_Checked" Tag="1"/>
+                <RadioButton x:Name="TabWords" Content="单词本" Style="{StaticResource SegBtn}"
+                             GroupName="TransTab" Checked="Tab_Checked" Tag="2"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 文本翻译 -->
+        <Grid x:Name="PaneText" Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="86"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="30"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0">
+                <TextBox x:Name="InputBox" Style="{StaticResource AppBox}" Height="86"
+                         AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto" KeyDown="Input_KeyDown"/>
+                <TextBlock x:Name="InputHint" Text="日语" FontSize="13" IsHitTestVisible="False"
+                           Foreground="{DynamicResource AppText3}" Margin="13,9,0,0"
+                           VerticalAlignment="Top" HorizontalAlignment="Left"/>
+            </Grid>
+
+            <StackPanel Grid.Row="2" Orientation="Horizontal">
+                <Button x:Name="BtnTranslate" Content="翻译" Style="{StaticResource PrimaryBtn}"
+                        Height="30" Click="BtnTranslate_Click"/>
+                <Button Content="翻译剪贴板" Style="{StaticResource PillBtn}" Height="30"
+                        Margin="6,0,0,0" Click="BtnTranslateClip_Click" Tag="&#xE77F;"/>
+            </StackPanel>
+
+            <Border Grid.Row="4" Style="{StaticResource Card}" CornerRadius="16" Padding="14,6,8,10">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="22"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0">
+                        <TextBlock x:Name="StateText" Style="{StaticResource T3}" FontSize="11"
+                                   VerticalAlignment="Center"/>
+                        <Button x:Name="BtnCopy" Content="&#xE8C8;" Style="{StaticResource IconBtn}"
+                                Width="30" Height="22" FontSize="13" HorizontalAlignment="Right"
+                                ToolTip="复制译文" Click="BtnCopy_Click"/>
+                    </Grid>
+                    <ScrollViewer Grid.Row="1" Style="{StaticResource AppScroll}">
+                        <TextBlock x:Name="OutText" Text="" FontSize="15" FontWeight="Medium"
+                                   Foreground="{DynamicResource AppText}"
+                                   FontFamily="{StaticResource UiFont}"
+                                   TextWrapping="Wrap" VerticalAlignment="Top"/>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- 实时字幕 -->
+        <Grid x:Name="PaneLive" Grid.Row="2" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="30"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal">
+                <Button x:Name="BtnListen" Content="开始聆听" Style="{StaticResource PrimaryBtn}"
+                        Height="30" Click="BtnListen_Click"/>
+                <Border x:Name="LevelHost" Width="46" Height="8" CornerRadius="4" Margin="8,0,0,0"
+                        VerticalAlignment="Center" Background="{DynamicResource AppTrack}"
+                        ClipToBounds="True">
+                    <Border x:Name="LevelFill" Width="0" CornerRadius="4" HorizontalAlignment="Left"
+                            Background="{DynamicResource AppOn}"/>
+                </Border>
+                <TextBlock x:Name="LiveStatus" Style="{StaticResource T3}" FontSize="11.5"
+                           VerticalAlignment="Center" Margin="8,0,0,0"/>
+                <Button x:Name="BtnClearSub" Content="&#xE74D;" Style="{StaticResource IconBtn}"
+                        Width="30" Height="30" FontSize="12" Margin="8,0,0,0"
+                        ToolTip="清空" Click="BtnClearSub_Click"/>
+            </StackPanel>
+
+            <Border Grid.Row="2" Style="{StaticResource Card}" CornerRadius="16" Padding="10,8">
+                <ScrollViewer x:Name="SubScroll" Style="{StaticResource AppScroll}"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="SubStack" Orientation="Vertical"/>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- 单词本 -->
+        <Grid x:Name="PaneWords" Grid.Row="2" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="30"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal">
+                <TextBox x:Name="WordBox" Width="132" Height="30" FontSize="12" Padding="9,4"
+                         VerticalContentAlignment="Center"
+                         Style="{StaticResource AppBox}" KeyDown="WordBox_KeyDown" ToolTip="要加入单词本的词（日文/英文）"/>
+                <TextBox x:Name="ReadingBox" Width="84" Height="30" FontSize="12" Padding="9,4" Margin="6,0,0,0"
+                         VerticalContentAlignment="Center"
+                         Style="{StaticResource AppBox}" KeyDown="WordBox_KeyDown" ToolTip="读音（可选）"/>
+                <TextBox x:Name="MeaningBox" Width="146" Height="30" FontSize="12" Padding="9,4" Margin="6,0,0,0"
+                         VerticalContentAlignment="Center"
+                         Style="{StaticResource AppBox}" KeyDown="WordBox_KeyDown" ToolTip="释义（可选）"/>
+                <Button x:Name="BtnAddWord" Content="加入" Style="{StaticResource PrimaryBtn}"
+                        Height="30" Margin="6,0,0,0" Click="BtnAddWord_Click"/>
+                <Button x:Name="BtnReview" Content="复习" Style="{StaticResource PillBtn}"
+                        Height="30" Margin="6,0,0,0" Click="BtnReview_Click"/>
+                <TextBlock x:Name="WordStat" Style="{StaticResource T3}" FontSize="11.5"
+                           VerticalAlignment="Center" Margin="10,0,0,0" TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+
+            <Border Grid.Row="2" Style="{StaticResource Card}" CornerRadius="16" Padding="10,8">
+                <ctl:ScrollHost x:Name="WordScroll">
+                    <StackPanel x:Name="WordStack" Orientation="Vertical"/>
+                </ctl:ScrollHost>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -1,0 +1,150 @@
+<UserControl x:Class="Wisland.Pages.HomePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:Wisland.Controls"
+             Width="616" Height="240">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="186"/>
+            <RowDefinition Height="8"/>
+            <RowDefinition Height="46"/>
+        </Grid.RowDefinitions>
+
+        <!-- 首行：媒体卡 / 小形象 / 动作网格 -->
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="200"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="150"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 媒体卡 -->
+            <Border Grid.Column="0" Width="200" Height="156" VerticalAlignment="Top"
+                    CornerRadius="20" Padding="10,6" Background="{DynamicResource AppCard}"
+                    MouseEnter="MediaCard_Enter" MouseLeave="MediaCard_Leave">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="88"/>
+                        <RowDefinition Height="22"/>
+                        <RowDefinition Height="40"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 封面 + 标题 -->
+                    <Grid Grid.Row="0">
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <Border x:Name="CoverHost" Width="58" Height="58" CornerRadius="13"
+                                    Background="{DynamicResource AppCard}" ClipToBounds="True">
+                                <TextBlock x:Name="CoverGlyph" Text="&#xE8D6;"
+                                           FontFamily="{StaticResource IconFont}" FontSize="22"
+                                           Foreground="{DynamicResource AppText2}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <TextBlock x:Name="MediaTitle" Text="未在播放" Margin="0,6,0,0"
+                                       Style="{StaticResource T2}" HorizontalAlignment="Center"
+                                       FontSize="12.5" FontWeight="Medium" MaxWidth="180"
+                                       TextAlignment="Center"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- 进度 -->
+                    <Grid Grid.Row="1" Height="22" Cursor="Hand" MouseLeftButtonUp="Progress_Seek">
+                        <Border Height="4" Margin="0,2,0,0" VerticalAlignment="Top" CornerRadius="2"
+                                Background="{DynamicResource AppTrack}"/>
+                        <Border x:Name="ProgressFill" Height="4" Margin="0,2,0,0" VerticalAlignment="Top"
+                                CornerRadius="2" HorizontalAlignment="Left"
+                                Background="{DynamicResource AppText}"/>
+                        <TextBlock x:Name="TimeLeft" Text="0:00" FontSize="10.5"
+                                   FontFamily="{StaticResource NumFont}"
+                                   Foreground="{DynamicResource AppText3}"
+                                   HorizontalAlignment="Left" VerticalAlignment="Bottom"/>
+                        <TextBlock x:Name="TimeRight" Text="0:00" FontSize="10.5"
+                                   FontFamily="{StaticResource NumFont}"
+                                   Foreground="{DynamicResource AppText3}"
+                                   HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
+                    </Grid>
+
+                    <!-- 控制键 -->
+                    <StackPanel Grid.Row="2" Orientation="Horizontal"
+                                HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Button x:Name="BtnPrev" Content="&#xE892;" Style="{StaticResource IconBtn}"
+                                Width="34" Height="34" Click="BtnPrev_Click"/>
+                        <Button x:Name="BtnPlay" Content="&#xE768;" Style="{StaticResource IconBtn}"
+                                Width="40" Height="40" FontSize="18" Margin="6,0"
+                                Background="#22FFFFFF" Click="BtnPlay_Click"/>
+                        <Button x:Name="BtnNext" Content="&#xE893;" Style="{StaticResource IconBtn}"
+                                Width="34" Height="34" Click="BtnNext_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 小形象 + 歌词 -->
+            <Grid Grid.Column="2">
+                <controls:PetWidget x:Name="Pet" VerticalAlignment="Stretch"
+                                    HorizontalAlignment="Stretch" Margin="0,0,0,0"/>
+                <StackPanel x:Name="LyricBar" Orientation="Vertical" VerticalAlignment="Bottom"
+                            Margin="6,0,6,4" Visibility="Collapsed" IsHitTestVisible="False">
+                    <TextBlock x:Name="LyricMain" FontSize="12.5" FontWeight="Medium"
+                               TextAlignment="Center" TextTrimming="CharacterEllipsis"
+                               MaxWidth="210" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource AppText}"/>
+                    <TextBlock x:Name="LyricSub" FontSize="11" Margin="0,2,0,0"
+                               TextAlignment="Center" TextTrimming="CharacterEllipsis"
+                               MaxWidth="210" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource AppText3}"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- 动作网格 2x2 -->
+            <UniformGrid Grid.Column="4" Rows="2" Columns="2" Width="150" Height="124"
+                         VerticalAlignment="Top">
+                <Border x:Name="ActPin" Style="{StaticResource Card}" Margin="0,0,4,4" Padding="4"
+                        CornerRadius="16" Cursor="Hand" MouseLeftButtonUp="ActPin_Click">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="ActPinGlyph" Text="&#xE77A;" FontFamily="{StaticResource IconFont}"
+                                   FontSize="18" HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource AppText}"/>
+                        <TextBlock x:Name="ActPinText" Text="保持展开" Style="{StaticResource T3}"
+                                   FontSize="11.5" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="ActPt" Style="{StaticResource Card}" Margin="0,0,0,4" Padding="4"
+                        CornerRadius="16" Cursor="Hand" MouseLeftButtonUp="ActPt_Click">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="&#xE8B0;" FontFamily="{StaticResource IconFont}" FontSize="18"
+                                   HorizontalAlignment="Center" Foreground="{DynamicResource AppText}"/>
+                        <TextBlock Text="可穿透" Style="{StaticResource T3}" FontSize="11.5"
+                                   HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="ActMute" Style="{StaticResource Card}" Margin="0,4,4,0" Padding="4"
+                        CornerRadius="16" Cursor="Hand" MouseLeftButtonUp="ActMute_Click">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="ActMuteGlyph" Text="&#xE767;"
+                                   FontFamily="{StaticResource IconFont}" FontSize="18"
+                                   HorizontalAlignment="Center" Foreground="{DynamicResource AppText}"/>
+                        <TextBlock x:Name="ActMuteText" Text="静音" Style="{StaticResource T3}"
+                                   FontSize="11.5" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="ActLive" Style="{StaticResource Card}" Margin="0,4,0,0" Padding="4"
+                        CornerRadius="16" Cursor="Hand" MouseLeftButtonUp="ActLive_Click">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="ActLiveGlyph" Text="&#xE720;"
+                                   FontFamily="{StaticResource IconFont}" FontSize="18"
+                                   HorizontalAlignment="Center" Foreground="{DynamicResource AppText}"/>
+                        <TextBlock x:Name="ActLiveText" Text="实时字幕" Style="{StaticResource T3}"
+                                   FontSize="11.5" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+        </Grid>
+
+        <!-- 启动器图标条 -->
+        <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Hidden"
+                      VerticalScrollBarVisibility="Disabled" PanningMode="HorizontalOnly">
+            <StackPanel x:Name="LaunchRow" Orientation="Horizontal" Height="44"/>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

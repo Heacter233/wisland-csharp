@@ -1,0 +1,29 @@
+<UserControl x:Class="Wisland.Pages.SettingsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctl="clr-namespace:Wisland.Controls"
+             Width="616" Height="400">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="28"/>
+            <RowDefinition Height="6"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <TextBlock x:Name="HintText" Style="{StaticResource T3}" VerticalAlignment="Center"
+                       Margin="2,0,0,0"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,14,0">
+                <Button x:Name="OpenCfgBtn" Content="打开配置" Style="{StaticResource PillBtn}"
+                        Height="26" FontSize="12" Margin="0,0,6,0" Click="OpenConfig_Click"/>
+                <Button x:Name="OpenDataBtn" Content="数据目录" Style="{StaticResource PillBtn}"
+                        Height="26" FontSize="12" Click="OpenData_Click"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- 自绘滚动容器：避免 ScrollViewer 在透明窗口中的滚动残影 -->
+        <ctl:ScrollHost x:Name="Host" Grid.Row="2" Margin="0,0,0,0">
+            <StackPanel x:Name="SectionStack" Margin="14,0,14,10"/>
+        </ctl:ScrollHost>
+    </Grid>
+</UserControl>
