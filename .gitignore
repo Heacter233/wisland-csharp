@@ -1,0 +1,25 @@
+# ---- .NET / Visual Studio ----
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.userprefs
+
+# ---- 运行时数据（含本地配置与隐私数据，不要提交）----
+data/
+config.json
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# ---- 构建产物 ----
+publish/
+*.pdb
+*.cache
+
+# ---- 系统 ----
+Thumbs.db
+desktop.ini
+.DS_Store
