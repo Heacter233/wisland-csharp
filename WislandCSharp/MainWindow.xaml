@@ -1,0 +1,15 @@
+<Window x:Class="Wisland.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="wisland"
+        Width="384" Height="98"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        UseLayoutRounding="True"
+        Icon="/Resources/1002.ico">
+    <Grid x:Name="RootGrid"/>
+</Window>
