@@ -19,12 +19,14 @@ public partial class MessagesPage : UserControl
         {
             Services.ServiceHub.Notify.CountsChanged += OnCounts;
             Services.ServiceHub.Notify.Notified += OnNotified;
+            Services.ServiceHub.Inbox.Changed += OnInbox;
             Refresh();
         };
         Unloaded += (_, _) =>
         {
             Services.ServiceHub.Notify.CountsChanged -= OnCounts;
             Services.ServiceHub.Notify.Notified -= OnNotified;
+            Services.ServiceHub.Inbox.Changed -= OnInbox;
         };
     }
 
@@ -34,6 +36,19 @@ public partial class MessagesPage : UserControl
     private void OnNotified(object? sender, Services.NotifyItem item) =>
         Dispatcher.BeginInvoke(new Action(Refresh));
 
+    private void OnInbox(object? sender, EventArgs e) =>
+        Dispatcher.BeginInvoke(new Action(Refresh));
+
+    /// <summary>列表里的统一行（系统通知与插件消息合并后共用的结构）。</summary>
+    private sealed record MsgRow(string Name, string Desc, DateTime Time, Color Dot);
+
+    private static Color LevelColor(string level) => level switch
+    {
+        "warn" => Color.FromRgb(0xF0, 0xB4, 0x29),
+        "error" => Color.FromRgb(0xE8, 0x4D, 0x5A),
+        _ => Color.FromRgb(0x5A, 0x9B, 0xF0),
+    };
+
     public void Refresh()
     {
         var notify = Services.ServiceHub.Notify;
@@ -41,12 +56,24 @@ public partial class MessagesPage : UserControl
         SetTile(CountWechat, TimeWechat, "wechat", notify.Counts.GetValueOrDefault("wechat"));
         SetTile(CountMail, TimeMail, "mail", notify.Counts.GetValueOrDefault("mail"));
 
-        HistoryList.Children.Clear();
-        foreach (var h in notify.History.Take(30))
+        // 合并：系统通知 + 插件推送（按时间倒序，最多 30 条）
+        var rows = new List<MsgRow>();
+        foreach (var h in notify.History)
+            rows.Add(new MsgRow(h.Name, h.Description, h.Time, KindColors.Get(h.Kind)));
+        foreach (var m in Services.ServiceHub.Inbox.Items)
         {
-            HistoryList.Children.Add(BuildRow(h));
+            var desc = string.IsNullOrWhiteSpace(m.Body) ? m.Title
+                     : string.IsNullOrWhiteSpace(m.Title) ? m.Body
+                     : $"{m.Title} · {m.Body}";
+            rows.Add(new MsgRow(m.DisplaySource, desc, m.Time, LevelColor(m.Level)));
         }
-        if (notify.History.Count == 0)
+
+        HistoryList.Children.Clear();
+        foreach (var r in rows.OrderByDescending(r => r.Time).Take(30))
+        {
+            HistoryList.Children.Add(BuildRow(r));
+        }
+        if (rows.Count == 0)
         {
             HistoryList.Children.Add(new TextBlock
             {
@@ -68,7 +95,7 @@ public partial class MessagesPage : UserControl
         time.Text = latest != null ? latest.Time.ToString("HH:mm") : "";
     }
 
-    private UIElement BuildRow(Services.NotifyItem item)
+    private UIElement BuildRow(MsgRow item)
     {
         var grid = new Grid { Height = 30 };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
@@ -80,7 +107,7 @@ public partial class MessagesPage : UserControl
         {
             Width = 8,
             Height = 8,
-            Fill = new SolidColorBrush(KindColors.Get(item.Kind)),
+            Fill = new SolidColorBrush(item.Dot),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
         };
@@ -100,7 +127,7 @@ public partial class MessagesPage : UserControl
 
         var desc = new TextBlock
         {
-            Text = item.Description,
+            Text = item.Desc,
             Style = (Style)FindResource("T2"),
             FontSize = 12.5,
             VerticalAlignment = VerticalAlignment.Center,
@@ -131,6 +158,7 @@ public partial class MessagesPage : UserControl
 
     private void ClearAll_Click(object sender, RoutedEventArgs e)
     {
+        try { Services.ServiceHub.Inbox.Clear(); } catch { }
         Services.ServiceHub.Notify.ClearAll();
     }
 }

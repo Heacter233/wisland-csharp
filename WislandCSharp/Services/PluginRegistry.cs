@@ -23,6 +23,9 @@ public sealed class PluginInfo
     public string Version { get; init; } = "0.0.0";
     public string Description { get; init; } = "";
     public PluginSettingsSection? Settings { get; init; }
+
+    /// <summary>该插件会向消息页推送文本消息（声明后宿主可在设置页展示，并用于告警过滤）。</summary>
+    public bool PushesMessages { get; init; }
 }
 
 /// <summary>

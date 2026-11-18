@@ -370,7 +370,7 @@ public partial class MainWindow : Window
     }
 
     private readonly System.Windows.Threading.DispatcherTimer _dragHold =
-        new() { Interval = TimeSpan.FromMilliseconds(500) };
+        new() { Interval = TimeSpan.FromMilliseconds(300) };
 
     private bool _holdPending;
 
@@ -568,6 +568,29 @@ public partial class MainWindow : Window
 
         // 系统模糊玻璃（默认开启）。--legacy-glass 可回退到抓屏方案做对比。
         Try("glass-mode", ApplyGlassMode);
+
+        // 调试：--inbox-demo 推两条示例消息，用来验证消息页的插件推送通道
+        Try("inbox-demo", () =>
+        {
+            if (!Array.Exists(Environment.GetCommandLineArgs(),
+                    a => string.Equals(a, "--inbox-demo", StringComparison.OrdinalIgnoreCase))) return;
+            ServiceHub.Inbox.Push(new Services.PluginMessage
+            {
+                Source = "clash",
+                SourceName = "Clash",
+                Title = "规则已更新",
+                Body = "订阅已同步，共 1284 条规则",
+                Level = "info",
+            });
+            ServiceHub.Inbox.Push(new Services.PluginMessage
+            {
+                Source = "bilibili",
+                SourceName = "哔哩哔哩",
+                Title = "新番更新",
+                Body = "《葬送的芙莉莲》第 12 话",
+                Level = "warn",
+            });
+        });
     }
 
     protected override void OnMouseEnter(MouseEventArgs e)
@@ -1322,7 +1345,7 @@ public partial class MainWindow : Window
     /// <summary>按 config 应用玻璃模式（启动与配置变更时调用）。</summary>
     private void ApplyGlassMode()
     {
-        var cfg = ServiceHub.Config.Get("island.glass", "system");
+        var cfg = ServiceHub.Config.Get("island.glass", "capture");
         if (Array.Exists(Environment.GetCommandLineArgs(),
                 a => string.Equals(a, "--capture-glass", StringComparison.OrdinalIgnoreCase)))
             cfg = "capture";

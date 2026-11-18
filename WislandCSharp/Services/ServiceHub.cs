@@ -29,6 +29,9 @@ public static class ServiceHub
     public static AudioService? Audio { get; set; }
     public static BrightnessService? Brightness { get; set; }
     public static NotifyService Notify { get; set; } = null!;
+
+    /// <summary>插件/外部程序推送文本消息的收件箱（消息页会合并显示）。</summary>
+    public static MessageInbox Inbox { get; set; } = new();
     public static RadioService Radio { get; set; } = null!;
     public static WordbookService Wordbook { get; set; } = null!;
 

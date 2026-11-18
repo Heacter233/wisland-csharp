@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="Wisland.Pages.MessagesPage"
+<UserControl x:Class="Wisland.Pages.MessagesPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Width="616" Height="270">
@@ -80,7 +80,7 @@
         </Grid>
 
         <!-- 全部已读 -->
-        <Button Grid.Row="2" Content="全部已读" Style="{StaticResource PillBtn}" Height="26"
+        <Button Grid.Row="2" Content="全部已读" Style="{StaticResource PillBtn}" Height="32"
                 HorizontalAlignment="Right" Click="ClearAll_Click" FontSize="12"/>
 
         <!-- 历史 -->

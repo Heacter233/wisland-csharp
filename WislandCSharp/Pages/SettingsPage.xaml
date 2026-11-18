@@ -15,9 +15,9 @@
                        Margin="2,0,0,0"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,14,0">
                 <Button x:Name="OpenCfgBtn" Content="打开配置" Style="{StaticResource PillBtn}"
-                        Height="26" FontSize="12" Margin="0,0,6,0" Click="OpenConfig_Click"/>
+                        Height="32" FontSize="12" Margin="0,0,6,0" Click="OpenConfig_Click"/>
                 <Button x:Name="OpenDataBtn" Content="数据目录" Style="{StaticResource PillBtn}"
-                        Height="26" FontSize="12" Click="OpenData_Click"/>
+                        Height="32" FontSize="12" Click="OpenData_Click"/>
             </StackPanel>
         </Grid>
 

@@ -11,7 +11,7 @@
         </Grid.RowDefinitions>
 
         <Grid Grid.Row="0">
-            <Button x:Name="ClearBtn" Content="清空" Style="{StaticResource PillBtn}" Height="26"
+            <Button x:Name="ClearBtn" Content="清空" Style="{StaticResource PillBtn}" Height="32"
                     HorizontalAlignment="Right" Margin="0,0,14,0" Click="Clear_Click" FontSize="12"/>
             <TextBlock x:Name="HintText" Style="{StaticResource T3}" VerticalAlignment="Center"
                        Margin="2,0,0,0"/>
