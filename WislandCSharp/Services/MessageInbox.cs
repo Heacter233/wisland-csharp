@@ -20,6 +20,18 @@ public sealed class PluginMessage
     /// <summary>是否已读（点磁贴/点条目后置为已读）。</summary>
     public bool Read { get; set; }
 
+    /// <summary>
+    /// 磁贴图标字形（Segoe MDL2 Assets 码位，如 "\uE774"）。
+    /// 留空则用通用对话气泡图标。
+    /// </summary>
+    public string? IconGlyph { get; init; }
+
+    /// <summary>
+    /// 磁贴图标底色（HTML 十六进制，如 "#E8544E"）。
+    /// 留空则按 <see cref="Level"/> 取色（info 蓝 / warn 黄 / error 红）。
+    /// </summary>
+    public string? IconColor { get; init; }
+
     /// <summary>点击条目要打开的链接（可选）。</summary>
     public string? Uri { get; init; }
 

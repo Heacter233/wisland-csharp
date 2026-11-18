@@ -55,6 +55,18 @@ public partial class MessagesPage : UserControl
     private sealed record MsgRow(
         string Name, string Desc, DateTime Time, Color Dot, string Kind, Services.PluginMessage? Plugin);
 
+    /// <summary>解析 "#RRGGBB" / "#AARRGGBB" / 颜色名；失败返回 null（回落到级别色）。</summary>
+    private static Color? ParseColor(string? hex)
+    {
+        if (string.IsNullOrWhiteSpace(hex)) return null;
+        try
+        {
+            if (ColorConverter.ConvertFromString(hex.Trim()) is Color c) return c;
+        }
+        catch { }
+        return null;
+    }
+
     private static Color LevelColor(string level) => level switch
     {
         "warn" => Color.FromRgb(0xF0, 0xB4, 0x29),
@@ -110,15 +122,20 @@ public partial class MessagesPage : UserControl
                 latest != null ? latest.Time.ToString("HH:mm") : "", name));
         }
 
-        // 插件来源：按来源聚合成磁贴（未读数 + 最近时间）
+        // 插件来源：按来源聚合成磁贴（未读数 + 最近时间 + 自定义图标）
         var inbox = Services.ServiceHub.Inbox;
         foreach (var g in inbox.Items.GroupBy(m => m.Source, StringComparer.OrdinalIgnoreCase))
         {
-            var latest = g.OrderByDescending(m => m.Time).First();
-            var unread = g.Count(m => !m.Read);
-            var color = LevelColor(latest.Level);
+            var items = g.OrderByDescending(m => m.Time).ToList();
+            var latest = items[0];
+            var unread = items.Count(m => !m.Read);
+            // 图标：取该来源最近一条带图标的消息，否则回落到通用图标
+            var glyphItem = items.FirstOrDefault(m =>
+                !string.IsNullOrWhiteSpace(m.IconGlyph) || !string.IsNullOrWhiteSpace(m.IconColor)) ?? latest;
+            var glyph = string.IsNullOrWhiteSpace(glyphItem.IconGlyph) ? PluginGlyph : glyphItem.IconGlyph!;
+            var color = ParseColor(glyphItem.IconColor) ?? LevelColor(latest.Level);
             TilesPanel.Children.Add(BuildTile(
-                "plugin:" + g.Key, latest.DisplaySource, PluginGlyph, color, unread,
+                "plugin:" + g.Key, latest.DisplaySource, glyph, color, unread,
                 latest.Time.ToString("HH:mm"), latest.DisplaySource));
         }
     }
@@ -226,16 +243,32 @@ public partial class MessagesPage : UserControl
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(64) });
 
-        var dot = new System.Windows.Shapes.Ellipse
+        FrameworkElement marker;
+        if (item.Plugin is { } pmIcon && !string.IsNullOrWhiteSpace(pmIcon.IconGlyph))
         {
-            Width = 8,
-            Height = 8,
-            Fill = new SolidColorBrush(item.Dot),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        Grid.SetColumn(dot, 0);
-        grid.Children.Add(dot);
+            marker = new TextBlock
+            {
+                Text = pmIcon.IconGlyph,
+                FontFamily = (FontFamily)FindResource("IconFont"),
+                FontSize = 12,
+                Foreground = new SolidColorBrush(ParseColor(pmIcon.IconColor) ?? item.Dot),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+        else
+        {
+            marker = new System.Windows.Shapes.Ellipse
+            {
+                Width = 8,
+                Height = 8,
+                Fill = new SolidColorBrush(item.Dot),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+        Grid.SetColumn(marker, 0);
+        grid.Children.Add(marker);
 
         var name = new TextBlock
         {

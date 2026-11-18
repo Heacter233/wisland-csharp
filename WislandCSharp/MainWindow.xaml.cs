@@ -582,6 +582,8 @@ public partial class MainWindow : Window
                 Title = "规则已更新",
                 Body = "订阅已同步，共 1284 条规则",
                 Level = "info",
+                IconGlyph = "\uE774",   // Globe
+                IconColor = "#E8544E",
             });
             ServiceHub.Inbox.Push(new Services.PluginMessage
             {
@@ -590,6 +592,8 @@ public partial class MainWindow : Window
                 Title = "新番更新",
                 Body = "《葬送的芙莉莲》第 12 话",
                 Level = "warn",
+                IconGlyph = "\uE714",   // Video
+                IconColor = "#FB7299",
                 Uri = "https://www.bilibili.com",
             });
         });
