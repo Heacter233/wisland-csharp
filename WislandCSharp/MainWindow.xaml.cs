@@ -257,7 +257,23 @@ public partial class MainWindow : Window
         _nav.SetCurrent(key);
         if (_chrome.IsExpanded)
         {
-            _chrome.RetargetExpandedHeight(CurrentPageHeight() + 66);
+            // 新页面的 Height 还是上一次 arrange 的旧值（甚至 0），直接取会拿到旧高度，
+            // 于是切到更高的页面（如剪贴板）时底部被裁掉。这里先强制量一次再取高度。
+            _pageHost.InvalidateMeasure();
+            _pageHost.UpdateLayout();
+            var page = _pages[key];
+            page.Measure(new Size(636, 2000));
+            var h = page.DesiredSize.Height;
+            if (h < 10) h = CurrentPageHeight();
+            _pageHeights[key] = h;
+            _chrome.RetargetExpandedHeight(h + 66);
+            _chrome.InvalidateMeasure();
+            if (_chrome.SystemGlass)
+            {
+                // 高度变了：先把窗口放到新包络（动画结束后会贴回药丸），
+                // 否则更高的页面底部会被当前窗口矩形裁掉。
+                BeginGlassAnim();
+            }
         }
         ServiceHub.Config.Set("island.last_tab", key, save: false);
     }
@@ -279,7 +295,69 @@ public partial class MainWindow : Window
             if (!IsActive) Activate();
         }
         catch { }
+
+        // 展开态拖拽：只有点在岛体本身（空白处，不是页面内容/卡片/控件）才进入拖拽，
+        // 避免抢掉剪贴板卡片点击、设置项点击等正常交互。
+        if (ReferenceEquals(e.OriginalSource, _chrome))
+        {
+            e.Handled = true;
+            CollapseToCursor();
+            return;
+        }
+
         base.OnMouseLeftButtonDown(e);
+    }
+
+    /// <summary>命中的是不是可交互控件（按钮、输入框、列表等）。用于区分"拖岛"与"点控件"。</summary>
+    private static bool IsInteractiveSource(object? src)
+    {
+        var d = src as DependencyObject;
+        while (d != null)
+        {
+            if (d is System.Windows.Controls.Primitives.ButtonBase
+                || d is System.Windows.Controls.Primitives.TextBoxBase
+                || d is System.Windows.Controls.Primitives.Selector
+                || d is System.Windows.Controls.Primitives.ScrollBar
+                || d is Wisland.Controls.ScrollHost
+                || d is System.Windows.Controls.ScrollViewer
+                || d is System.Windows.Controls.Primitives.Thumb)
+                return true;
+            d = System.Windows.Media.VisualTreeHelper.GetParent(d);
+        }
+        return false;
+    }
+
+    /// <summary>把岛收起到当前指针位置，然后立刻进入拖动（松手后按最近边吸附）。</summary>
+    private void CollapseToCursor()
+    {
+        var pos = Mouse.GetPosition(this);
+        var screenX = Left + pos.X;
+        var screenY = Top + pos.Y;
+
+        var wa = WorkAreaDip();
+        // 选最近的一条边
+        var gaps = new Dictionary<string, double>
+        {
+            ["top"] = Math.Abs(screenY - wa.Top),
+            ["bottom"] = Math.Abs(wa.Bottom - screenY),
+            ["left"] = Math.Abs(screenX - wa.Left),
+            ["right"] = Math.Abs(wa.Right - screenX),
+        };
+        _edge = gaps.OrderBy(kv => kv.Value).First().Key;
+        _chrome.AnchorEdge = _edge;
+        _pos = _edge is "top" or "bottom"
+            ? Math.Clamp((screenX - wa.Left) / wa.Width, 0, 1)
+            : Math.Clamp((screenY - wa.Top) / wa.Height, 0, 1);
+
+        Collapse();
+        // 等收起动画走一段（窗口已经变小）再拖，避免拖动中尺寸还在变
+        var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(160) };
+        t.Tick += (_, _) =>
+        {
+            t.Stop();
+            BeginDrag();
+        };
+        t.Start();
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -450,6 +528,13 @@ public partial class MainWindow : Window
         base.OnMouseLeave(e);
         _hoverTimer.Stop();
         if (!_chrome.IsExpanded || _passthrough) return;
+
+        // DWM 模式下窗口每帧贴着药丸改尺寸，指针可能暂时落到"新窗口矩形之外"，
+        // WPF 会误报 MouseLeave → 收起 → 又因为指针回到窗口上而展开，来回抖。
+        // 只要指针还在本体矩形内就当作没离开。
+        if (_chrome.BodyRect.Contains(Mouse.GetPosition(_chrome))) return;
+        // 动画进行中也不收
+        if (_glassAnimating) return;
         if (ServiceHub.Config.Get("island.pinned", false)) return;
         // 菜单/对话框打开期间不收
         if (_uiLocks.Count > 0) return;

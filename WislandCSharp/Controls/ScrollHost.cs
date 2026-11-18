@@ -37,8 +37,9 @@ public sealed class ScrollHost : Decorator
         var h = ActualHeight;
         if (w <= 0 || h <= 0) return;
 
-        if (Background is { } bg)
-            dc.DrawRectangle(bg, null, new Rect(0, 0, w, h));
+        // 必须始终画一层（没有背景时画透明）：Decorator 在空白处没有绘制内容就不参与
+        // 命中测试，鼠标停在内容之间的空隙时滚轮事件根本到不了这里。
+        dc.DrawRectangle(Background ?? Brushes.Transparent, null, new Rect(0, 0, w, h));
 
         // 右侧细滚动指示条
         if (_max > 1)

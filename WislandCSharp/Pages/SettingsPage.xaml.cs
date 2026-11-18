@@ -49,7 +49,8 @@ public partial class SettingsPage : UserControl
 
         var cfg = ServiceHub.Config;
         // 系统模糊模式下不铺底板，才能真正透出背景
-        Host.Background = SolidScrollPlate ? new SolidColorBrush(Themes.ScrollPlate()) : null;
+        // 纯色底板已移除：设置页直接透出玻璃/背景
+        Host.Background = null;
 
         // ===== 基础设置 =====
         var basic = AddSection("基础设置", "外观、交互与开机行为");
