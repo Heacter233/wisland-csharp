@@ -30,6 +30,9 @@ public static class AppLauncher
         string[] KnownPaths,
         string Uri);
 
+    /// <summary>启动后是否再唤出一次（拿焦点）。</summary>
+    private static bool _focusAfterLaunch = true;
+
     private static readonly Target[] Targets =
     {
         new("qq",
@@ -75,11 +78,29 @@ public static class AppLauncher
         var target = Targets.FirstOrDefault(t => t.Kind == kind);
         Log(kind, "start", $"configured='{configuredPath}'");
 
+        // 进程在跑 → 把它的窗口唤到前台并聚焦（最小化/托盘状态也要还原），不再重复启动
+        if (target != null)
+        {
+            var probe = target.ExeNames.ToList();
+            if (!string.IsNullOrWhiteSpace(configuredPath))
+            {
+                var cfgExe = Path.GetFileName(Expand(configuredPath));
+                if (!string.IsNullOrWhiteSpace(cfgExe) && !probe.Contains(cfgExe, StringComparer.OrdinalIgnoreCase))
+                    probe.Add(cfgExe);
+            }
+            if (WindowActivator.TryActivate(probe.ToArray(), target.Keywords, out var actDetail))
+            {
+                Log(kind, "ok:activated", actDetail);
+                return true;
+            }
+            Log(kind, "miss:activate", actDetail + " | " + WindowActivator.Diagnostics);
+        }
+
         // 1) 配置路径
         if (!string.IsNullOrWhiteSpace(configuredPath))
         {
             var p = Expand(configuredPath);
-            if (File.Exists(p) && TryStart(p)) { Log(kind, "ok:config", p); return true; }
+            if (File.Exists(p) && TryStart(p)) { Log(kind, "ok:config", p); FocusAfterLaunch(kind, target); return true; }
             Log(kind, "miss:config", p);
         }
 
@@ -102,6 +123,7 @@ public static class AppLauncher
             {
                 Log(kind, "ok:running", path!);
                 RememberPath(kind, path!);
+                FocusAfterLaunch(kind, target);
                 return true;
             }
         }
@@ -110,7 +132,7 @@ public static class AppLauncher
         foreach (var kp in target.KnownPaths)
         {
             var p = Expand(kp);
-            if (File.Exists(p) && TryStart(p)) { Log(kind, "ok:known-path", p); RememberPath(kind, p); return true; }
+            if (File.Exists(p) && TryStart(p)) { Log(kind, "ok:known-path", p); RememberPath(kind, p); FocusAfterLaunch(kind, target); return true; }
         }
 
         // 4) 开始菜单快捷方式（排除卸载/帮助/更新之类的快捷方式，避免误启动卸载程序）
@@ -130,6 +152,7 @@ public static class AppLauncher
             {
                 Log(kind, "ok:shortcut-target", resolved!);
                 RememberPath(kind, resolved!);
+                FocusAfterLaunch(kind, target);
                 return true;
             }
             if (TryStart(lnk)) { Log(kind, "ok:shortcut", lnk); return true; }
@@ -141,7 +164,7 @@ public static class AppLauncher
             foreach (var exe in target.ExeNames)
             {
                 var found = FindExe(dir, exe, depth: 2);
-                if (found != null && TryStart(found)) { Log(kind, "ok:registry", found); RememberPath(kind, found); return true; }
+                if (found != null && TryStart(found)) { Log(kind, "ok:registry", found); RememberPath(kind, found); FocusAfterLaunch(kind, target); return true; }
             }
         }
 
@@ -149,11 +172,32 @@ public static class AppLauncher
         if (!string.IsNullOrEmpty(target.Uri) && TryStart(target.Uri))
         {
             Log(kind, "ok:uri", target.Uri);
+            FocusAfterLaunch(kind, target);
             return true;
         }
 
         Log(kind, "fail:exhausted", "");
         return false;
+    }
+
+    /// <summary>启动后再等窗口出现并唤出一次，保证新启动的程序拿到焦点。</summary>
+    private static void FocusAfterLaunch(string kind, Target target)
+    {
+        if (!_focusAfterLaunch) return;
+        try
+        {
+            for (var i = 0; i < 15; i++)
+            {
+                System.Threading.Thread.Sleep(400);
+                if (WindowActivator.TryActivate(target.ExeNames, target.Keywords, out var detail))
+                {
+                    Log(kind, "ok:activated-after-launch", detail);
+                    return;
+                }
+            }
+            Log(kind, "miss:activate-after-launch", "");
+        }
+        catch { }
     }
 
     /// <summary>把探测到的路径写回 config（notify.open.&lt;kind&gt;），下次直接命中第 1 级。</summary>
