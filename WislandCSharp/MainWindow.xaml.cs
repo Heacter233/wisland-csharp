@@ -445,8 +445,9 @@ public partial class MainWindow : Window
 
             _chrome.SystemGlass = true;
             _chrome.CornerFog = Environment.GetEnvironmentVariable("WISLAND_NO_FOG") != "1";
-            // 四角雾化强度可调：island.glass_fog（0~255，默认 64）
-            var fogAlpha = ServiceHub.Config.Get("island.glass_fog", 64);
+            // 四角雾化强度可调：island.glass_fog（0~255，默认 0 = 关闭；
+            // 亚克力模糊本来就只跟着 alpha 走，四角是透明的，不需要遮盖）
+            var fogAlpha = ServiceHub.Config.Get("island.glass_fog", 0);
             _chrome.CornerFogAlpha = (byte)Math.Clamp(fogAlpha, 0, 255);
             _chrome.FillWindow = true;
             Pages.SettingsPage.SolidScrollPlate = false;

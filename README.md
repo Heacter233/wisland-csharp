@@ -55,24 +55,27 @@ dotnet build -c Debug
 
 ## 已知问题
 
-1. **毛玻璃的实现与取舍**
+1. **毛玻璃的实现**
 
-   默认使用 **DWM 系统模糊**（`SetWindowCompositionAttribute` + `ACCENT_ENABLE_ACRYLICBLURBEHIND`）：
+   使用 **DWM 系统模糊**（`SetWindowCompositionAttribute` + `ACCENT_ENABLE_ACRYLICBLURBEHIND`）：
    由 DWM 实时模糊窗口背后的桌面，不截屏、无鬼影、CPU 开销几乎为零。
 
-   实测记录（Windows 10 19045，分层窗口）：
+   实测记录（Windows 10 19045，WPF 分层窗口）：
 
    | accent 状态 | 表现 |
    | --- | --- |
-   | `ACCENT_ENABLE_BLURBEHIND`（state 3） | **失效**：窗口矩形被铺成黑色，白底上药丸内部纯黑 |
-   | `ACCENT_ENABLE_ACRYLICBLURBEHIND`（state 4） | **正常**：真实模糊，可透出背后窗口内容 |
+   | `ACCENT_ENABLE_BLURBEHIND`（state 3） | **失效**：窗口矩形被铺成黑色，白底上药丸内部纯黑，四角出现黑方块 |
+   | `ACCENT_ENABLE_ACRYLICBLURBEHIND`（state 4） | **正常**：真实模糊，且**模糊只出现在有 alpha 的像素处** |
 
-   因为 accent 模糊的作用域是**窗口矩形**，药丸圆角外侧那四小块也会被模糊，
-   所以额外画了一层很淡的**四角雾化**（主题色，透明度约 0.2）把矩形边界盖住，
-   避免在白底/照片背景上露出方形痕迹。雾不能太重，否则会变成四块黑角（试过）。
+   关键结论：亚克力的模糊跟着逐像素 alpha 走，所以药丸圆角外侧（alpha=0）本来就是透明的、
+   不会带出矩形模糊，**不需要任何四角遮盖**。之前折腾的"四角方角"全部来自 state 3。
 
-   抓屏模糊（`island.glass = "capture"`）仍保留：形状完美，但抓屏会拍到自身，
-   有鬼影风险，只作对比与兜底。
+   另外验证过：纯 Win32 窗口（非分层 / 无重定向位图 / 分层 / 透明，四种都试了）单独挂
+   accent 是**完全不显示**的 —— 因为窗口没有 alpha 内容可承载模糊。所以"底层玻璃板 +
+   上层内容窗"的双窗口方案在 Win10 上走不通，模糊必须由绘制内容的那块分层窗口自己带。
+
+   抓屏模糊（`island.glass = "capture"`）仍保留：形状完美，但抓屏会拍到自身，有鬼影风险，只作兜底。
+   `island.glass_fog`（0~255，默认 0）是四角雾化的可选旋钮，正常不需要开。
 2. **部分功能未完全实现**：见上表的 ⚠️ / ◐ / ❌ 项；它们不是"看起来能用其实没做"，设置页里有「扩展与实验」分组如实标注状态。
 3. **液态形变未移植**：原版的液桥、拉丝、贴边内凹圆角是逐帧几何建模，目前只有简化版（弹簧缩放 + 按压压扁）。
 
@@ -81,7 +84,7 @@ dotnet build -c Debug
 - **插件系统**：`PluginRegistry` 已提供注册与设置面板挂载点，下一步做加载器（从 `plugins/` 目录加载、隔离异常、生命周期管理）。
 - 液态形变（液桥 / 拉丝）的几何实现。
 - 股票行情、Clash 集成、Anki 同步。
-- 玻璃：Win11 上可换用 `DWMWA_SYSTEMBACKDROP_TYPE` + 系统圆角，省掉四角雾化这层补丁。
+- 玻璃：Win11 上可换用 `DWMWA_SYSTEMBACKDROP_TYPE`，效果与系统一致。
 
 ## 目录结构
 

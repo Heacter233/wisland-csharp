@@ -489,8 +489,15 @@ public sealed class IslandChrome : Panel
     /// </summary>
     public bool CornerFog { get; set; }
 
-    /// <summary>四角雾化强度（0~255）。0 = 完全透明，越大越能盖住矩形模糊的方角。</summary>
-    public byte CornerFogAlpha { get; set; } = 64;
+    /// <summary>
+    /// 四角雾化强度（0~255）。默认 0 = 关闭。
+    ///
+    /// 实测结论：亚克力（ACCENT_ENABLE_ACRYLICBLURBEHIND）的模糊**只出现在窗口有 alpha 的像素处**，
+    /// 药丸圆角外侧 alpha=0 的区域本来就是透明的、不会带模糊 —— 所以四角不需要遮盖。
+    /// 之前的"四角方角/黑块"来自 CLASSIC blur-behind（state 3），它在分层窗口上是把窗口矩形涂黑。
+    /// 这个旋钮只在对某些驱动/主题下想额外柔化边缘时才用。
+    /// </summary>
+    public byte CornerFogAlpha { get; set; }
 
     /// <summary>
     /// 药丸外的雾状柔边宽度（DIP）。0 = 关闭。
