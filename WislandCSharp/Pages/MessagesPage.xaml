@@ -1,7 +1,7 @@
 <UserControl x:Class="Wisland.Pages.MessagesPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             Width="616" Height="270">
+             Width="616" Height="400">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -11,15 +11,21 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 消息磁贴：内置三块（QQ/微信/邮件）+ 插件推送来源，代码里动态生成；超过一行自动换行 -->
-        <WrapPanel x:Name="TilesPanel" Grid.Row="0" Orientation="Horizontal"/>
+        <!-- 磁贴容器：固定显示两行（4×2 = 8 块），更多磁贴用滚轮在这个容器内查找 -->
+        <ScrollViewer x:Name="TilesScroll" Grid.Row="0" Height="160"
+                      VerticalScrollBarVisibility="Hidden"
+                      HorizontalScrollBarVisibility="Disabled"
+                      PanningMode="VerticalOnly"
+                      Background="Transparent">
+            <WrapPanel x:Name="TilesPanel" Orientation="Horizontal"/>
+        </ScrollViewer>
 
         <!-- 全部已读 -->
         <Button Grid.Row="2" Content="全部已读" Style="{StaticResource PillBtn}" Height="32"
                 HorizontalAlignment="Right" Click="ClearAll_Click" FontSize="12"/>
 
-        <!-- 历史 -->
-        <ScrollViewer Grid.Row="4" Style="{StaticResource AppScroll}">
+        <!-- 历史（超过一屏可折叠，底部有"显示全部"） -->
+        <ScrollViewer Grid.Row="4" Style="{StaticResource AppScroll}" Background="Transparent">
             <StackPanel x:Name="HistoryList" Orientation="Vertical"/>
         </ScrollViewer>
     </Grid>

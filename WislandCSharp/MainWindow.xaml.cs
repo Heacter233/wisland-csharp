@@ -596,6 +596,30 @@ public partial class MainWindow : Window
                 IconColor = "#FB7299",
                 Uri = "https://www.bilibili.com",
             });
+            // 再塞 7 个来源，用来验证"磁贴两行 + 滚轮查找 + 右键置顶"
+            var demo = new (string Src, string Name, string Glyph, string Color)[]
+            {
+                ("weather", "天气预警", "\uE9CA", "#4A90D9"),
+                ("calendar", "日程提醒", "\uE787", "#7B61FF"),
+                ("download", "下载完成", "\uE896", "#31A36B"),
+                ("stock", "股价提醒", "\uE9D9", "#E8892B"),
+                ("git", "代码推送", "\uE8A5", "#6B7280"),
+                ("rss", "RSS 更新", "\uE8F1", "#C2410C"),
+                ("anki", "Anki 到期", "\uE8FD", "#0EA5A4"),
+            };
+            foreach (var (src, name, glyph, color) in demo)
+            {
+                ServiceHub.Inbox.Push(new Services.PluginMessage
+                {
+                    Source = src,
+                    SourceName = name,
+                    Title = name,
+                    Body = "示例消息",
+                    Level = "info",
+                    IconGlyph = glyph,
+                    IconColor = color,
+                });
+            }
         });
     }
 

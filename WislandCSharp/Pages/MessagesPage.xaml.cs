@@ -24,9 +24,22 @@ public partial class MessagesPage : UserControl
     /// <summary>插件来源磁贴用的通用图标。</summary>
     private const string PluginGlyph = "\uE8BD";
 
+    /// <summary>列表默认显示条数（超出折叠）。</summary>
+    private const int CollapsedRows = 5;
+
+    /// <summary>列表最多展示条数（全展开时）。</summary>
+    private const int MaxRows = 30;
+
+    /// <summary>是否已展开全部消息。</summary>
+    private bool _showAll;
+
+    /// <summary>置顶的插件来源（右键磁贴切换，存放在 config 的 island.msg_pinned）。</summary>
+    private readonly HashSet<string> _pinned = new(StringComparer.OrdinalIgnoreCase);
+
     public MessagesPage()
     {
         InitializeComponent();
+        LoadPinned();
         Loaded += (_, _) =>
         {
             Services.ServiceHub.Notify.CountsChanged += OnCounts;
@@ -67,6 +80,27 @@ public partial class MessagesPage : UserControl
         return null;
     }
 
+    private void LoadPinned()
+    {
+        _pinned.Clear();
+        try
+        {
+            var raw = Services.ServiceHub.Config.Get("island.msg_pinned", "");
+            foreach (var s in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                _pinned.Add(s);
+        }
+        catch { }
+    }
+
+    private void SavePinned()
+    {
+        try
+        {
+            Services.ServiceHub.Config.Set("island.msg_pinned", string.Join(",", _pinned));
+        }
+        catch { }
+    }
+
     private static Color LevelColor(string level) => level switch
     {
         "warn" => Color.FromRgb(0xF0, 0xB4, 0x29),
@@ -91,9 +125,15 @@ public partial class MessagesPage : UserControl
         }
 
         HistoryList.Children.Clear();
-        foreach (var r in rows.OrderByDescending(r => r.Time).Take(30))
+        var ordered = rows.OrderByDescending(r => r.Time).ToList();
+        var limit = _showAll ? MaxRows : CollapsedRows;
+        foreach (var r in ordered.Take(limit))
         {
             HistoryList.Children.Add(BuildRow(r));
+        }
+        if (ordered.Count > CollapsedRows)
+        {
+            HistoryList.Children.Add(BuildMoreRow(ordered.Count));
         }
         if (rows.Count == 0)
         {
@@ -123,8 +163,20 @@ public partial class MessagesPage : UserControl
         }
 
         // 插件来源：按来源聚合成磁贴（未读数 + 最近时间 + 自定义图标）
+        // 排序：置顶的来源排在最前，其余按最近消息时间倒序
         var inbox = Services.ServiceHub.Inbox;
-        foreach (var g in inbox.Items.GroupBy(m => m.Source, StringComparer.OrdinalIgnoreCase))
+        var groups = inbox.Items
+            .GroupBy(m => m.Source, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        groups.Sort((a, b) =>
+        {
+            var pa = _pinned.Contains(a.Key) ? 0 : 1;
+            var pb = _pinned.Contains(b.Key) ? 0 : 1;
+            if (pa != pb) return pa - pb;
+            return b.Max(m => m.Time).CompareTo(a.Max(m => m.Time));
+        });
+
+        foreach (var g in groups)
         {
             var items = g.OrderByDescending(m => m.Time).ToList();
             var latest = items[0];
@@ -136,12 +188,15 @@ public partial class MessagesPage : UserControl
             var color = ParseColor(glyphItem.IconColor) ?? LevelColor(latest.Level);
             TilesPanel.Children.Add(BuildTile(
                 "plugin:" + g.Key, latest.DisplaySource, glyph, color, unread,
-                latest.Time.ToString("HH:mm"), latest.DisplaySource));
+                latest.Time.ToString("HH:mm"),
+                _pinned.Contains(g.Key) ? latest.DisplaySource + "（已置顶，右键取消）"
+                                        : latest.DisplaySource + "（右键置顶）",
+                pinned: _pinned.Contains(g.Key)));
         }
     }
 
     private Border BuildTile(string tag, string name, string glyph, Color color,
-        int count, string time, string tooltip)
+        int count, string time, string tooltip, bool pinned = false)
     {
         var canvas = new Canvas();
 
@@ -216,6 +271,26 @@ public partial class MessagesPage : UserControl
             Child = canvas,
         };
         tile.MouseLeftButtonUp += Tile_Click;
+
+        if (tag.StartsWith("plugin:", StringComparison.Ordinal))
+        {
+            // 右键：置顶 / 取消置顶
+            tile.MouseRightButtonUp += Tile_RightClick;
+            if (pinned)
+            {
+                var pin = new TextBlock
+                {
+                    Text = "\uE840",     // Pin
+                    FontFamily = (FontFamily)FindResource("IconFont"),
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(color),
+                };
+                Canvas.SetLeft(pin, 130);
+                Canvas.SetTop(pin, 6);
+                canvas.Children.Add(pin);
+            }
+        }
+
         return tile;
     }
 
@@ -231,6 +306,45 @@ public partial class MessagesPage : UserControl
         }
 
         Services.ServiceHub.Notify.Open(tag);
+    }
+
+    /// <summary>右键磁贴：切换置顶（置顶的来源磁贴排在最前）。</summary>
+    private void Tile_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not string tag) return;
+        if (!tag.StartsWith("plugin:", StringComparison.Ordinal)) return;
+
+        e.Handled = true;
+        var source = tag["plugin:".Length..];
+        if (!_pinned.Remove(source)) _pinned.Add(source);
+        SavePinned();
+        Refresh();
+    }
+
+    /// <summary>列表底部的"显示全部 / 收起"行。</summary>
+    private UIElement BuildMoreRow(int total)
+    {
+        var text = new TextBlock
+        {
+            Text = _showAll ? "收起" : $"显示全部（共 {total} 条）",
+            Style = (Style)FindResource("T3"),
+            FontSize = 11.5,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 6, 0, 4),
+        };
+        var host = new Border
+        {
+            Background = Brushes.Transparent,
+            Cursor = Cursors.Hand,
+            Child = text,
+        };
+        host.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            _showAll = !_showAll;
+            Refresh();
+        };
+        return host;
     }
 
     // ---------------- 列表行 ----------------
