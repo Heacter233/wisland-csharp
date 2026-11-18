@@ -433,7 +433,9 @@ public sealed class IslandChrome : Panel
         var tint = Themes.Tint();
         // 只做"极轻"遮盖：目的不是把四角涂成玻璃，而是让模糊矩形的硬边界
         // 不至于在白底/照片背景上露成一块方形。太重会变成四块黑角（实测过）。
-        var peak = Themes.IsDark ? (byte)64 : (byte)52;
+        var peak = CornerFogAlpha;
+        if (!Themes.IsDark) peak = (byte)(peak * 0.85);
+        if (peak == 0) return;
         var edge = (byte)(peak * 0.35);
 
         var outside = new CombinedGeometry(
@@ -486,6 +488,9 @@ public sealed class IslandChrome : Panel
     /// 打开后用一层雾把这几块盖住，模糊边界就不会露成方角。
     /// </summary>
     public bool CornerFog { get; set; }
+
+    /// <summary>四角雾化强度（0~255）。0 = 完全透明，越大越能盖住矩形模糊的方角。</summary>
+    public byte CornerFogAlpha { get; set; } = 64;
 
     /// <summary>
     /// 药丸外的雾状柔边宽度（DIP）。0 = 关闭。

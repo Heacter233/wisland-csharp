@@ -445,6 +445,9 @@ public partial class MainWindow : Window
 
             _chrome.SystemGlass = true;
             _chrome.CornerFog = Environment.GetEnvironmentVariable("WISLAND_NO_FOG") != "1";
+            // 四角雾化强度可调：island.glass_fog（0~255，默认 64）
+            var fogAlpha = ServiceHub.Config.Get("island.glass_fog", 64);
+            _chrome.CornerFogAlpha = (byte)Math.Clamp(fogAlpha, 0, 255);
             _chrome.FillWindow = true;
             Pages.SettingsPage.SolidScrollPlate = false;
             // accent 模式：亚克力（state 4）是唯一在 Win10 19045 上真正出模糊的；
