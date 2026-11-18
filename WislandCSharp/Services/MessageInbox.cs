@@ -14,8 +14,17 @@ public sealed class PluginMessage
     public string Title { get; init; } = "";
     public string Body { get; init; } = "";
     public DateTime Time { get; init; } = DateTime.Now;
-    /// <summary>info / warn / error，用于配色（预留）。</summary>
+    /// <summary>info / warn / error，用于配色。</summary>
     public string Level { get; init; } = "info";
+
+    /// <summary>是否已读（点磁贴/点条目后置为已读）。</summary>
+    public bool Read { get; set; }
+
+    /// <summary>点击条目要打开的链接（可选）。</summary>
+    public string? Uri { get; init; }
+
+    /// <summary>点击条目要执行的回调（可选，进程内）。</summary>
+    public Action? Action { get; init; }
 
     public string DisplaySource => string.IsNullOrWhiteSpace(SourceName) ? Source : SourceName;
 }
@@ -89,6 +98,32 @@ public sealed class MessageInbox
             else _items.RemoveAll(m => string.Equals(m.Source, source, StringComparison.OrdinalIgnoreCase));
         }
         Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>把某条消息标为已读。</summary>
+    public void MarkRead(PluginMessage message)
+    {
+        if (message == null || message.Read) return;
+        message.Read = true;
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>把某个来源（或全部）标为已读。</summary>
+    public void MarkRead(string? source = null)
+    {
+        lock (_lock)
+        {
+            foreach (var m in _items)
+                if (string.IsNullOrEmpty(source) || string.Equals(m.Source, source, StringComparison.OrdinalIgnoreCase))
+                    m.Read = true;
+        }
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>未读总数。</summary>
+    public int UnreadCount()
+    {
+        lock (_lock) return _items.Count(m => !m.Read);
     }
 
     /// <summary>按来源统计条数（消息页顶部磁贴用）。</summary>

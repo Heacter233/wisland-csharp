@@ -350,6 +350,7 @@ public partial class MainWindow : Window
         return ReferenceEquals(src, _chrome);
     }
 
+
     /// <summary>命中的是不是可交互控件（按钮、输入框、列表等）。用于区分"拖岛"与"点控件"。</summary>
     private static bool IsInteractiveSource(object? src)
     {
@@ -589,6 +590,7 @@ public partial class MainWindow : Window
                 Title = "新番更新",
                 Body = "《葬送的芙莉莲》第 12 话",
                 Level = "warn",
+                Uri = "https://www.bilibili.com",
             });
         });
     }
@@ -616,6 +618,9 @@ public partial class MainWindow : Window
         // 会让这里永远判定"还在岛内"，于是彻底收不起来（踩过）。
         // 改用系统真实光标位置与本体的屏幕矩形比较。
         if (CursorInBody()) return;
+        // 页面/导航内容被重建时（例如消息磁贴刷新）WPF 会对被移除的元素误报 MouseLeave，
+        // 指针其实还在页面上：这种情况也不能收。
+        if (_pageHost.IsMouseOver || _nav.IsMouseOver) return;
         if (ServiceHub.Config.Get("island.pinned", false)) return;
         // 菜单/对话框打开期间不收
         if (_uiLocks.Count > 0) return;

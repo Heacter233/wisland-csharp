@@ -4,80 +4,15 @@
              Width="616" Height="270">
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="84"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="8"/>
             <RowDefinition Height="26"/>
             <RowDefinition Height="8"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 三块消息磁贴 -->
-        <Grid Grid.Row="0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="200"/>
-                <ColumnDefinition Width="8"/>
-                <ColumnDefinition Width="200"/>
-                <ColumnDefinition Width="8"/>
-                <ColumnDefinition Width="200"/>
-            </Grid.ColumnDefinitions>
-
-            <Border x:Name="TileQq" Grid.Column="0" Style="{StaticResource Card}" CornerRadius="18"
-                    Padding="0" Cursor="Hand" MouseLeftButtonUp="Tile_Click" Tag="qq">
-                <Canvas>
-                    <Border Canvas.Left="12" Canvas.Top="12" Width="30" Height="30" CornerRadius="15"
-                            Background="#12B7F5">
-                        <TextBlock Text="&#xE8F2;" FontFamily="{StaticResource IconFont}" FontSize="14"
-                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <TextBlock Canvas.Left="50" Canvas.Top="16" Text="QQ" Style="{StaticResource T1}"
-                               FontSize="13"/>
-                    <TextBlock x:Name="CountQq" Canvas.Left="14" Canvas.Top="46" Text="0" FontSize="22"
-                               FontWeight="Bold" FontFamily="{StaticResource NumFont}"
-                               Foreground="{DynamicResource AppText3}"/>
-                    <TextBlock x:Name="TimeQq" Canvas.Left="130" Canvas.Top="52" Text="" FontSize="11"
-                               FontFamily="{StaticResource NumFont}"
-                               Foreground="{DynamicResource AppText3}"/>
-                </Canvas>
-            </Border>
-
-            <Border x:Name="TileWechat" Grid.Column="2" Style="{StaticResource Card}" CornerRadius="18"
-                    Padding="0" Cursor="Hand" MouseLeftButtonUp="Tile_Click" Tag="wechat">
-                <Canvas>
-                    <Border Canvas.Left="12" Canvas.Top="12" Width="30" Height="30" CornerRadius="15"
-                            Background="#07C160">
-                        <TextBlock Text="&#xE8BD;" FontFamily="{StaticResource IconFont}" FontSize="14"
-                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <TextBlock Canvas.Left="50" Canvas.Top="16" Text="微信" Style="{StaticResource T1}"
-                               FontSize="13"/>
-                    <TextBlock x:Name="CountWechat" Canvas.Left="14" Canvas.Top="46" Text="0" FontSize="22"
-                               FontWeight="Bold" FontFamily="{StaticResource NumFont}"
-                               Foreground="{DynamicResource AppText3}"/>
-                    <TextBlock x:Name="TimeWechat" Canvas.Left="130" Canvas.Top="52" Text="" FontSize="11"
-                               FontFamily="{StaticResource NumFont}"
-                               Foreground="{DynamicResource AppText3}"/>
-                </Canvas>
-            </Border>
-
-            <Border x:Name="TileMail" Grid.Column="4" Style="{StaticResource Card}" CornerRadius="18"
-                    Padding="0" Cursor="Hand" MouseLeftButtonUp="Tile_Click" Tag="mail">
-                <Canvas>
-                    <Border Canvas.Left="12" Canvas.Top="12" Width="30" Height="30" CornerRadius="15"
-                            Background="#FF9F0A">
-                        <TextBlock Text="&#xE715;" FontFamily="{StaticResource IconFont}" FontSize="14"
-                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <TextBlock Canvas.Left="50" Canvas.Top="16" Text="邮件" Style="{StaticResource T1}"
-                               FontSize="13"/>
-                    <TextBlock x:Name="CountMail" Canvas.Left="14" Canvas.Top="46" Text="0" FontSize="22"
-                               FontWeight="Bold" FontFamily="{StaticResource NumFont}"
-                               Foreground="{DynamicResource AppText3}"/>
-                    <TextBlock x:Name="TimeMail" Canvas.Left="130" Canvas.Top="52" Text="" FontSize="11"
-                               FontFamily="{StaticResource NumFont}"
-                               Foreground="{DynamicResource AppText3}"/>
-                </Canvas>
-            </Border>
-        </Grid>
+        <!-- 消息磁贴：内置三块（QQ/微信/邮件）+ 插件推送来源，代码里动态生成；超过一行自动换行 -->
+        <WrapPanel x:Name="TilesPanel" Grid.Row="0" Orientation="Horizontal"/>
 
         <!-- 全部已读 -->
         <Button Grid.Row="2" Content="全部已读" Style="{StaticResource PillBtn}" Height="32"
