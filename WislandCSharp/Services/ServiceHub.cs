@@ -63,6 +63,9 @@ public static class ServiceHub
     /// <summary>请求重新应用主题。</summary>
     public static Action? RequestThemeRefresh { get; set; }
 
+    /// <summary>重新应用毛玻璃模式（island.glass / glass_accent / glass_fog / glass_corner 变化时）。</summary>
+    public static Action? RequestGlass { get; set; }
+
     /// <summary>请求按当前页面高度重新计算岛高度（页面内容变化时调用）。</summary>
     public static Action? RequestRetargetHeight { get; set; }
 

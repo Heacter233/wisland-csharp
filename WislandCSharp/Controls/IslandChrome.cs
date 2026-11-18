@@ -141,7 +141,8 @@ public sealed class IslandChrome : Panel
             var bh = Math.Max(24, _h.X);
             var squash = 0.0;
             if (_expanded || bh > 60) squash = Math.Min(30.0, bh / 2);
-            return _expanded ? squash : Math.Min(bh / 2, Math.Min(bw / 2, 30.0));
+            var r = _expanded ? squash : Math.Min(bh / 2, Math.Min(bw / 2, 30.0));
+            return CornerRadiusOverride > 0.5 ? CornerRadiusOverride : r;
         }
     }
 
@@ -315,6 +316,7 @@ public sealed class IslandChrome : Panel
         var squash = 0.0;
         if (_expanded || bh > 60) squash = Math.Min(30.0, bh / 2);
         var baseR = _expanded ? squash : Math.Min(bh / 2, Math.Min(bw / 2, 30.0));
+        if (CornerRadiusOverride > 0.5) baseR = CornerRadiusOverride;
 
         // 按压形变：沿远离屏幕边方向压扁（简化：整体缩放）
         var pk = Anim.Clamp(_poke.X, -0.5, 1.2);
@@ -329,7 +331,9 @@ public sealed class IslandChrome : Panel
         var rect = new Rect(r.X + (bw - w) / 2, r.Y + (bh - h) / 2, w, h);
         var radii = _expanded
             ? new[] { baseR, baseR, baseR, baseR }
-            : new[] { h / 2, h / 2, h / 2, h / 2 };
+            : (CornerRadiusOverride > 0.5
+                ? new[] { baseR, baseR, baseR, baseR }
+                : new[] { h / 2, h / 2, h / 2, h / 2 });
 
         return RoundedRect(rect, radii);
     }
@@ -384,8 +388,13 @@ public sealed class IslandChrome : Panel
         dc.PushClip(path);
         var r = _bodyRect;
 
-        var backdrop = SystemGlass ? null : Backdrop?.Brush;
-        if (SystemGlass)
+        var backdrop = (SystemGlass || SolidGlass) ? null : Backdrop?.Brush;
+        if (SolidGlass)
+        {
+            // 实色：不依赖任何模糊，近不透明，性能最好
+            dc.DrawRectangle(SolidTint(), null, r);
+        }
+        else if (SystemGlass)
         {
             // 模糊由 DWM 在窗口背后实时完成，这里只叠色调与光泽
             dc.DrawRectangle(SystemGlassTint(), null, r);
@@ -504,6 +513,16 @@ public sealed class IslandChrome : Panel
     /// <summary>系统级背景模糊（DWM accent）：真实实时模糊，不需要抓屏。</summary>
     public bool SystemGlass { get; set; }
 
+    /// <summary>实色玻璃（无任何模糊）：近不透明的主题色填充，最省性能。</summary>
+    public bool SolidGlass { get; set; }
+
+    /// <summary>
+    /// 覆盖本体圆角（0 = 用默认：收起态是胶囊、展开态是大圆角）。
+    /// DWM 模糊模式把它设成小圆角（~14），药丸变成"圆角矩形"，
+    /// 这样 accent 模糊矩形和本体形状的差集只剩四个很小的角，四角问题基本消失。
+    /// </summary>
+    public double CornerRadiusOverride { get; set; }
+
     /// <summary>
     /// 四角雾化遮盖：系统模糊（accent）的作用域是窗口矩形，
     /// 药丸圆角外侧那四块"本不该有玻璃"的区域会带上矩形模糊。
@@ -562,6 +581,23 @@ public sealed class IslandChrome : Panel
         // 内侧再叠一层极淡的白雾，让边缘有"毛玻璃凝霜"的质感
         var fogColor = Color.FromArgb(Themes.IsDark ? (byte)16 : (byte)34, 255, 255, 255);
         dc.DrawGeometry(null, new Pen(new SolidColorBrush(fogColor), w * 0.9), path);
+    }
+
+    /// <summary>实色玻璃的填充：近不透明主题色（背景基本看不见）。</summary>
+    private static Brush SolidTint()
+    {
+        var tint = Themes.Tint();
+        var a = (byte)Math.Clamp((int)tint.A + 20, 200, 245);
+        var c1 = Color.FromArgb(a, tint.R, tint.G, tint.B);
+        Color c2;
+        if (Themes.Current.Tint2 is { } t2)
+            c2 = Color.FromArgb(a, t2.R, t2.G, t2.B);
+        else
+            c2 = Color.FromArgb(a,
+                (byte)Math.Min(255, tint.R + 10),
+                (byte)Math.Min(255, tint.G + 10),
+                (byte)Math.Min(255, tint.B + 12));
+        return new LinearGradientBrush(c1, c2, new Point(0, 0), new Point(0.25, 1));
     }
 
     private static Brush SystemGlassTint()

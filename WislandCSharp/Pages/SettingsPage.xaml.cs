@@ -54,6 +54,11 @@ public partial class SettingsPage : UserControl
         // ===== 基础设置 =====
         var basic = AddSection("基础设置", "外观、交互与开机行为");
 
+        AddCard(basic, CardChoice("毛玻璃模式", "island.glass",
+            new[] { "system", "capture", "solid" },
+            new[] { "DWM 动态模糊", "抓屏（静态）", "实色无模糊" },
+            cfg.Get("island.glass", "system")));
+
         AddCard(basic, CardChoice("主题", "island.theme",
             new[] { "auto", "light", "dark", "rouge", "sky" },
             new[] { "自动", "浅色", "深色", "胭脂", "天青" },
@@ -457,6 +462,11 @@ public partial class SettingsPage : UserControl
     {
         switch (key)
         {
+            case "island.glass":
+                cfg.Set(key, value);
+                ServiceHub.RequestGlass?.Invoke();
+                break;
+
             case "island.theme":
                 cfg.Set(key, value);
                 Themes.Mode = value;

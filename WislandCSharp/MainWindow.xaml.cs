@@ -116,6 +116,7 @@ public partial class MainWindow : Window
 
     private const uint SwpNoZorder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
+    private const uint SwpNoRedraw = 0x0008;
 
     private int _glassPx = int.MinValue, _glassPy, _glassPw, _glassPh;
     private string _blurRgnKey = "";
@@ -140,6 +141,11 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             StartTicker();
+
+        // 预热：首次展开时页面还没量过，会在展开那一帧触发完整布局（实测 ~50ms 尖峰）。
+        // 这里在启动后的空闲时机把所有页面量一遍，展开就只剩动画本身。
+        Dispatcher.BeginInvoke(new Action(PrewarmPages),
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             _clockTimer.Start();
             // 窗口真正显示后再尝试一次：分层窗口在句柄刚创建时排除可能失败
             _backdrop?.RetryExclude();
@@ -368,6 +374,7 @@ public partial class MainWindow : Window
                 ServiceHub.RaiseThemeChanged();
             };
             ServiceHub.RequestThemeRefresh = () => ThemeApplier.Apply(Application.Current.Resources);
+        ServiceHub.RequestGlass = () => Try("glass-mode", ApplyGlassMode);
         });
 
         Try("restore", () =>
@@ -424,47 +431,7 @@ public partial class MainWindow : Window
         });
 
         // 系统模糊玻璃（默认开启）。--legacy-glass 可回退到抓屏方案做对比。
-        Try("glass-mode", () =>
-        {
-            // 玻璃实现：
-            //   system（默认）= DWM accent 模糊：DWM 实时模糊窗口背后的桌面，无需抓屏、无鬼影；
-            //                   代价是作用域为窗口矩形，药丸四角外侧也会带上模糊，
-            //                   由 IslandChrome 的角部雾化遮盖（CornerFog）。
-            //   capture      = 抓屏模糊：形状完美，但抓屏会拍到自身，兜底方案（有鬼影风险）。
-            // 默认 DWM 亚克力：玻璃是**实时**的（视频/游戏/滚动都会跟着变）。
-            // 抓屏方案虽然形状完美，但玻璃内容会定格在最后一次抓屏（可达几十秒前），
-            // 观感上更像"贴了一张旧截图"，因此只作兜底：island.glass = "capture"。
-            var cfg = ServiceHub.Config.Get("island.glass", "system");
-            var wantCapture =
-                Array.Exists(Environment.GetCommandLineArgs(),
-                    a => string.Equals(a, "--capture-glass", StringComparison.OrdinalIgnoreCase)) ||
-                string.Equals(cfg, "capture", StringComparison.OrdinalIgnoreCase);
-
-            if (wantCapture)
-            {
-                _chrome.HaloWidth = 12;   // 抓屏模式窗口留了边距，雾边有地方画
-                return;
-            }
-
-            _chrome.SystemGlass = true;
-            _chrome.CornerFog = Environment.GetEnvironmentVariable("WISLAND_NO_FOG") != "1";
-            // 四角雾化强度可调：island.glass_fog（0~255，默认 0 = 关闭；
-            // 亚克力模糊本来就只跟着 alpha 走，四角是透明的，不需要遮盖）
-            var fogAlpha = ServiceHub.Config.Get("island.glass_fog", 0);
-            _chrome.CornerFogAlpha = (byte)Math.Clamp(fogAlpha, 0, 255);
-            _chrome.FillWindow = true;
-            Pages.SettingsPage.SolidScrollPlate = false;
-            // accent 变体：
-            //   blur（默认，state 3）= ACCENT_ENABLE_BLURBEHIND，真实模糊。
-            //       注意：DWM 的这层模糊**不会被 BitBlt 抓屏捕获**（截图里显示为黑色），
-            //       所以只能用眼睛验证，不能用截图判断。
-            //   acrylic（state 4）= 只有透明+色调，实测没有可见模糊。
-            var variant = Environment.GetEnvironmentVariable("WISLAND_GLASS_VARIANT")
-                          ?? ServiceHub.Config.Get("island.glass_accent", "blur");
-            ApplyAccent(!string.Equals(variant, "acrylic", StringComparison.OrdinalIgnoreCase));
-            SyncGlassWindowGeometry();
-            _chrome.InvalidateVisual();
-        });
+        Try("glass-mode", ApplyGlassMode);
     }
 
     protected override void OnMouseEnter(MouseEventArgs e)
@@ -492,8 +459,32 @@ public partial class MainWindow : Window
         _collapseTimer.Start();
     }
 
+    /// <summary>把所有页面按展开尺寸量一遍（只测量不显示），消除首次展开的布局尖峰。</summary>
+    private void PrewarmPages()
+    {
+        try
+        {
+            var w = 636.0;
+            foreach (var page in _pages.Values)
+            {
+                page.Measure(new Size(w, 2000));
+                var h = Math.Min(1200, Math.Max(120, page.DesiredSize.Height));
+                page.Arrange(new Rect(0, 0, w, h));
+            }
+            // 展开高度也提前算一次
+            _chrome.ExpandedHeight = () => CurrentPageHeight() + 66;
+            _ = CurrentPageHeight();
+        }
+        catch (Exception ex) { App.LogCrash("prewarm pages", ex); }
+    }
+
     private void StartTicker()
     {
+        _glassResume.Tick += (_, _) =>
+        {
+            _glassResume.Stop();
+            if (_chrome.SystemGlass) ApplyAccent(_glassBlurBehind);
+        };
         if (_renderingHooked) return;
         _renderingHooked = true;
 
@@ -525,7 +516,7 @@ public partial class MainWindow : Window
         // 系统模糊模式下窗口必须贴合胶囊：accent 模糊是窗口矩形级的。
         // 但逐帧 SetWindowPos 会让 DWM 每帧重新合成亚克力 → 展开/收起卡成幻灯片。
         // 因此：动画期间关掉 accent、把窗口一次性设成"目标尺寸包络"，动画结束再贴回药丸。
-        if (_chrome.SystemGlass) UpdateGlassDuringAnimation(moving || navMoving);
+        if (_chrome.SystemGlass && !(moving || navMoving)) EndGlassAnim();
 
         // 光标位置 → 收起态形变与形象视线
         var mouse = Mouse.GetPosition(_chrome);
@@ -568,13 +559,18 @@ public partial class MainWindow : Window
         _hoverTimer.Stop();
         _collapseTimer.Stop();
         _chrome.ExpandedHeight = () => CurrentPageHeight() + 66;
+
         _chrome.Expand();
-        // 首次展开时页面可能还没被测量，强制走一次布局，避免空白
+
+        // 在动画第一帧之前完成窗口 resize + 关 DWM 合成。
+        // 这步在分层窗口上约 15ms，落在动画之外（此刻药丸还没开始动），不会表现为动画掉帧。
+        BeginGlassAnim();
+
         _pageHost.InvalidateMeasure();
         _pageHost.UpdateLayout();
+
         Dispatcher.BeginInvoke(new Action(() => _pageHost.UpdateLayout()),
             System.Windows.Threading.DispatcherPriority.Loaded);
-        // 展开后允许键盘输入（输入框需要窗口激活）
         try { Activate(); } catch { }
 
         var page = _pages.TryGetValue(_currentPage, out var p) ? p : null;
@@ -589,6 +585,7 @@ public partial class MainWindow : Window
         _hoverTimer.Stop();
         _collapseTimer.Stop();
         _chrome.Collapse();
+        BeginGlassAnim();
     }
 
     public void ToggleIsland()
@@ -1108,8 +1105,56 @@ public partial class MainWindow : Window
 
     private bool _glassAnimating;
 
+    private readonly System.Windows.Threading.DispatcherTimer _glassResume =
+        new() { Interval = TimeSpan.FromMilliseconds(90) };
+
     /// <summary>当前 accent 变体（true = 经典 blur-behind 真模糊；false = 亚克力）。</summary>
     private bool _glassBlurBehind = true;
+
+    /// <summary>玻璃模式：system（DWM 动态模糊）/ capture（抓屏静态模糊）/ solid（实色无模糊）。</summary>
+    private string _glassMode = "system";
+
+    /// <summary>按 config 应用玻璃模式（启动与配置变更时调用）。</summary>
+    private void ApplyGlassMode()
+    {
+        var cfg = ServiceHub.Config.Get("island.glass", "system");
+        if (Array.Exists(Environment.GetCommandLineArgs(),
+                a => string.Equals(a, "--capture-glass", StringComparison.OrdinalIgnoreCase)))
+            cfg = "capture";
+        _glassMode = cfg;
+
+        var solid = string.Equals(cfg, "solid", StringComparison.OrdinalIgnoreCase);
+        var capture = string.Equals(cfg, "capture", StringComparison.OrdinalIgnoreCase);
+        var system = !solid && !capture;
+
+        _chrome.SolidGlass = solid;
+        _chrome.SystemGlass = system;
+        _chrome.FillWindow = system;
+        // 实色/抓屏模式不需要角部雾化；DWM 模式留可调旋钮
+        _chrome.CornerFog = system && Environment.GetEnvironmentVariable("WISLAND_NO_FOG") != "1";
+        _chrome.CornerFogAlpha = (byte)Math.Clamp(
+            ServiceHub.Config.Get("island.glass_fog", 0), 0, 255);
+        // DWM 模式改成小圆角矩形：accent 模糊矩形与本体形状的差集只剩很小的角
+        _chrome.CornerRadiusOverride = system
+            ? Math.Clamp(ServiceHub.Config.Get("island.glass_corner", 14), 0, 60)
+            : 0;
+        _chrome.HaloWidth = 0;
+        Pages.SettingsPage.SolidScrollPlate = !system;
+
+        if (system)
+        {
+            var variant = Environment.GetEnvironmentVariable("WISLAND_GLASS_VARIANT")
+                          ?? ServiceHub.Config.Get("island.glass_accent", "blur");
+            ApplyAccent(!string.Equals(variant, "acrylic", StringComparison.OrdinalIgnoreCase));
+            SyncGlassWindowGeometry();
+        }
+        else
+        {
+            SystemBlur.Apply(_hwnd, false);
+        }
+
+        _chrome.InvalidateVisual();
+    }
 
     private void ApplyAccent(bool blurBehind)
     {
@@ -1118,35 +1163,31 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 动画期间的玻璃窗口处理。
-    /// 动画中：禁用 accent（避免每帧重新合成），窗口尺寸取"当前/目标尺寸的包络"，只设一次；
-    /// 动画结束：贴回药丸尺寸并重新开启 accent。
+    /// 动画开始前调用：关掉 DWM 合成、把窗口一次性放大成"包络"，
+    /// 之后整段动画期间窗口尺寸和 accent 都不再变动 → 动画只受 WPF 绘制影响，不卡。
     /// </summary>
-    private void UpdateGlassDuringAnimation(bool animating)
+    private void BeginGlassAnim()
     {
-        if (animating)
-        {
-            if (_glassAnimating) return;
-            _glassAnimating = true;
-            _chrome.CenterBody = true;
-            SystemBlur.Apply(_hwnd, false);
-            var (cw, _) = _chrome.BodySize;
-            var (_, chh) = _chrome.BodySize;
-            var (tw, th) = _chrome.BodyTarget;
-            SyncGlassWindow((Math.Max(cw, tw) + 2, Math.Max(chh, th) + 2));
-            return;
-        }
+        if (!_chrome.SystemGlass || _glassAnimating) return;
+        _glassAnimating = true;
+        _chrome.CenterBody = true;
+        SystemBlur.Apply(_hwnd, false);
 
-        if (!_glassAnimating)
-        {
-            SyncGlassWindowGeometry();
-            return;
-        }
+        var (cw, ch) = _chrome.BodySize;
+        var (tw, th) = _chrome.BodyTarget;
+        SyncGlassWindow((Math.Max(cw, tw) + 2, Math.Max(ch, th) + 2));
+    }
 
+    /// <summary>动画结束后调用：贴回药丸尺寸，稍后再把 DWM 合成开回来（错开最后一帧）。</summary>
+    private void EndGlassAnim()
+    {
+        if (!_glassAnimating) return;
         _glassAnimating = false;
         _chrome.CenterBody = false;
         SyncGlassWindowGeometry();
-        ApplyAccent(_glassBlurBehind);
+
+        _glassResume.Stop();
+        _glassResume.Start();
     }
 
     /// <summary>把窗口贴到给定本体尺寸上（系统模糊模式用，窗口矩形=模糊矩形）。</summary>
@@ -1202,7 +1243,7 @@ public partial class MainWindow : Window
 
         // 位置与尺寸一次性设置，避免"先改宽再改左"的中间帧导致左右抖动
         SetWindowPos(_hwnd, IntPtr.Zero, px, py, pw, ph,
-            SwpNoZorder | SwpNoActivate);
+            SwpNoZorder | SwpNoActivate | SwpNoRedraw);
 
         // 实验：DWM 区域限制（DWM_BB_BLURREGION）能否裁掉窗口矩形级的 accent 模糊
     }
