@@ -21,6 +21,9 @@ public interface IConfigService
 
     /// <summary>读取启动器列表（config.json → launcher[]）。</summary>
     System.Collections.Generic.List<LauncherItem> GetLauncher();
+
+    /// <summary>保存启动栏列表（写入 config.json → launcher[]）。</summary>
+    void SaveLauncher(System.Collections.Generic.List<LauncherItem> items);
 }
 
 /// <summary>
@@ -205,6 +208,30 @@ public class ConfigService : IConfigService
     }
 
     /// <summary>读取启动器列表（config.json → launcher[]）。</summary>
+    public void SaveLauncher(List<LauncherItem> items)
+    {
+        lock (_lock)
+        {
+            var arr = new List<object?>();
+            foreach (var it in items)
+            {
+                var d = new Dictionary<string, object?>
+                {
+                    ["name"] = it.Name,
+                    ["path"] = it.Path,
+                };
+                if (!string.IsNullOrEmpty(it.Glyph)) d["glyph"] = it.Glyph;
+                if (!string.IsNullOrEmpty(it.Exe)) d["exe"] = it.Exe;
+                if (it.Pinned) d["pinned"] = true;
+                if (!string.IsNullOrEmpty(it.Icon)) d["icon"] = it.Icon;
+                if (it.IsFolder) d["folder"] = true;
+                arr.Add(d);
+            }
+            _values["launcher"] = arr;
+        }
+        Save();
+    }
+
     public List<LauncherItem> GetLauncher()
     {
         var list = new List<LauncherItem>();
@@ -220,6 +247,9 @@ public class ConfigService : IConfigService
                     Path = d.TryGetValue("path", out var p) ? p as string ?? "" : "",
                     Glyph = d.TryGetValue("glyph", out var g) ? g as string ?? "" : "",
                     Exe = d.TryGetValue("exe", out var e) ? e as string ?? "" : "",
+            Pinned = d.TryGetValue("pinned", out var pin) && pin is bool pb && pb,
+            Icon = d.TryGetValue("icon", out var ic) ? ic as string ?? "" : "",
+            IsFolder = d.TryGetValue("folder", out var fo) && fo is bool fb && fb,
                 });
             }
         }

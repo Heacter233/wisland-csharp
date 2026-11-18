@@ -10,6 +10,15 @@ public sealed class LauncherItem
     public string Path { get; set; } = "";
     public string Glyph { get; set; } = "";
     public string Exe { get; set; } = "";
+
+    /// <summary>是否置顶（排在启动栏最前）。</summary>
+    public bool Pinned { get; set; }
+
+    /// <summary>自定义图标文件路径（.png/.ico/.jpg）；为空则用系统图标。</summary>
+    public string Icon { get; set; } = "";
+
+    /// <summary>是否为文件夹（影响图标与提示文字）。</summary>
+    public bool IsFolder { get; set; }
 }
 
 /// <summary>

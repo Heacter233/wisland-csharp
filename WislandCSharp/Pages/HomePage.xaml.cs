@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -21,6 +22,7 @@ public partial class HomePage : UserControl
     public HomePage()
     {
         InitializeComponent();
+        LaunchScroll.PreviewMouseWheel += LaunchScroll_PreviewMouseWheel;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         _tick.Tick += (_, _) =>
@@ -206,35 +208,202 @@ public partial class HomePage : UserControl
     }
 
     // ---------------- 启动器 ----------------
+    /// <summary>启动栏：滚轮左右滑动（一行容器内横向滚动）。</summary>
+    private void LaunchScroll_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        e.Handled = true;
+        var target = LaunchScroll.HorizontalOffset - e.Delta;
+        LaunchScroll.ScrollToHorizontalOffset(Math.Max(0, target));
+    }
+
     private void BuildLauncher()
     {
         LaunchRow.Children.Clear();
-        foreach (var item in Services.ServiceHub.Config.GetLauncher())
-        {
-            var glyph = string.IsNullOrEmpty(item.Glyph);
-            var b = new Button
-            {
-                Width = 44,
-                Height = 44,
-                Margin = new Thickness(0, 0, 2, 0),
-                Style = (Style)FindResource("IconBtn"),
-                Content = glyph ? (string.IsNullOrEmpty(item.Name) ? "?" : item.Name[..1]) : item.Glyph,
-                FontSize = glyph ? 15 : 20,
-                ToolTip = item.Name,
-            };
-            if (glyph) b.FontFamily = (FontFamily)FindResource("UiFont");
-            b.Click += (_, _) => Launch(item);
-            LaunchRow.Children.Add(b);
-        }
+
+        // 置顶优先，其余保持原顺序
+        var items = Services.ServiceHub.Config.GetLauncher()
+            .Select((it, idx) => (it, idx))
+            .OrderByDescending(x => x.it.Pinned)
+            .ThenBy(x => x.idx)
+            .Select(x => x.it)
+            .ToList();
+
+        foreach (var item in items) LaunchRow.Children.Add(BuildLaunchButton(item));
+        LaunchRow.Children.Add(BuildAddButton());
     }
 
+    /// <summary>单个启动项按钮：系统图标/自定义图标 + 右键菜单（置顶/自定义图标/移除）。</summary>
+    private Button BuildLaunchButton(Services.LauncherItem item)
+    {
+        var isFolder = item.IsFolder || Directory.Exists(item.Path);
+        var name = string.IsNullOrWhiteSpace(item.Name)
+            ? Services.ShellIcons.DisplayName(item.Path, isFolder)
+            : item.Name;
+
+        var b = new Button
+        {
+            Width = 44,
+            Height = 44,
+            Margin = new Thickness(0, 0, 2, 0),
+            Style = (Style)FindResource("IconBtn"),
+            ToolTip = name,                     // 文件夹显示名字而不是路径
+        };
+
+        var icon = Services.ShellIcons.Get(item.Path, isFolder, item.Icon);
+        if (icon != null)
+        {
+            b.Content = new Image
+            {
+                Source = icon,
+                Width = 26,
+                Height = 26,
+                Stretch = Stretch.Uniform,
+            };
+        }
+        else
+        {
+            b.Content = name.Length > 0 ? name[..1] : "?";
+            b.FontSize = 15;
+            b.FontFamily = (FontFamily)FindResource("UiFont");
+        }
+
+        b.Click += (_, _) => Launch(item);
+
+        var menu = new ContextMenu();
+        var pin = new MenuItem { Header = item.Pinned ? "取消置顶" : "置顶" };
+        pin.Click += (_, _) =>
+        {
+            item.Pinned = !item.Pinned;
+            SaveAndRebuild();
+        };
+        var iconItem = new MenuItem { Header = "自定义图标…" };
+        iconItem.Click += (_, _) => PickCustomIcon(item);
+        var remove = new MenuItem { Header = "移除" };
+        remove.Click += (_, _) =>
+        {
+            var list = Services.ServiceHub.Config.GetLauncher();
+            list.RemoveAll(x => string.Equals(x.Path, item.Path, StringComparison.OrdinalIgnoreCase));
+            Services.ServiceHub.Config.SaveLauncher(list);
+            BuildLauncher();
+        };
+        menu.Items.Add(pin);
+        menu.Items.Add(iconItem);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(remove);
+        b.ContextMenu = menu;
+
+        return b;
+    }
+
+    /// <summary>行尾的 + 号：添加程序/文件或文件夹。</summary>
+    private Button BuildAddButton()
+    {
+        var b = new Button
+        {
+            Width = 44,
+            Height = 44,
+            Margin = new Thickness(0, 0, 2, 0),
+            Style = (Style)FindResource("IconBtn"),
+            Content = "\uE710",                 // Add
+            FontFamily = (FontFamily)FindResource("IconFont"),
+            FontSize = 18,
+            ToolTip = "添加快捷启动项",
+        };
+
+        var menu = new ContextMenu();
+        var fileItem = new MenuItem { Header = "添加程序 / 文件…" };
+        fileItem.Click += (_, _) => AddByFile();
+        var folderItem = new MenuItem { Header = "添加文件夹…" };
+        folderItem.Click += (_, _) => AddByFolder();
+        menu.Items.Add(fileItem);
+        menu.Items.Add(folderItem);
+        b.ContextMenu = menu;
+        b.Click += (_, _) => { menu.PlacementTarget = b; menu.IsOpen = true; };
+
+        return b;
+    }
+
+    private void AddByFile()
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择程序或文件",
+            Filter = "程序 (*.exe;*.bat;*.cmd;*.lnk)|*.exe;*.bat;*.cmd;*.lnk|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dlg.ShowDialog() != true) return;
+        AddItem(dlg.FileName, false);
+    }
+
+    private void AddByFolder()
+    {
+        var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "选择文件夹" };
+        if (dlg.ShowDialog() != true) return;
+        AddItem(dlg.FolderName, true);
+    }
+
+    private void AddItem(string path, bool isFolder)
+    {
+        var list = Services.ServiceHub.Config.GetLauncher();
+        if (list.Any(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase)))
+        {
+            BuildLauncher();
+            return;
+        }
+        list.Add(new Services.LauncherItem
+        {
+            Name = Services.ShellIcons.DisplayName(path, isFolder),
+            Path = path,
+            IsFolder = isFolder,
+        });
+        Services.ServiceHub.Config.SaveLauncher(list);
+        BuildLauncher();
+    }
+
+    private void PickCustomIcon(Services.LauncherItem item)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择图标（png / ico / jpg）",
+            Filter = "图标文件|*.png;*.ico;*.jpg;*.jpeg|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        var list = Services.ServiceHub.Config.GetLauncher();
+        var target = list.FirstOrDefault(x =>
+            string.Equals(x.Path, item.Path, StringComparison.OrdinalIgnoreCase));
+        if (target == null) return;
+        target.Icon = dlg.FileName;
+        Services.ServiceHub.Config.SaveLauncher(list);
+        BuildLauncher();
+    }
+
+    private void SaveAndRebuild()
+    {
+        Services.ServiceHub.Config.SaveLauncher(Services.ServiceHub.Config.GetLauncher());
+        BuildLauncher();
+    }
+
+    /// <summary>启动：文件夹用资源管理器打开，其余交给 shell。</summary>
     private static void Launch(Services.LauncherItem item)
     {
         try
         {
-            if (File.Exists(item.Path))
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(item.Path)
+            var path = item.Path;
+            if (string.IsNullOrWhiteSpace(path)) return;
+
+            if (Directory.Exists(path))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe",
+                    $"\"{path}\"") { UseShellExecute = true });
+                return;
+            }
+            if (File.Exists(path))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path)
                 { UseShellExecute = true });
+            }
         }
         catch { }
     }

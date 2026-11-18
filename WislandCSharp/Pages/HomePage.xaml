@@ -142,8 +142,9 @@
         </Grid>
 
         <!-- 启动器图标条 -->
-        <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Hidden"
-                      VerticalScrollBarVisibility="Disabled" PanningMode="HorizontalOnly">
+        <ScrollViewer x:Name="LaunchScroll" Grid.Row="2" HorizontalScrollBarVisibility="Hidden"
+                      VerticalScrollBarVisibility="Disabled" PanningMode="HorizontalOnly"
+                      Background="Transparent">
             <StackPanel x:Name="LaunchRow" Orientation="Horizontal" Height="44"/>
         </ScrollViewer>
     </Grid>
