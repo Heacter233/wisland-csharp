@@ -18,7 +18,40 @@ public class WeatherService : IWeatherService, IDisposable
     private const string OmApi = "https://api.open-meteo.com/v1/forecast";
     private const string OmGeo = "https://geocoding-api.open-meteo.com/v1/search";
 
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(12) };
+    private readonly HttpClient _http = CreateHttp();
+
+    /// <summary>
+    /// 统一的 HttpClient：带正常 User-Agent，超时 12s。
+    /// 不强制 TLS 版本（交给系统协商；强制固定版本在服务器升级后容易失效）。
+    /// </summary>
+    private static HttpClient CreateHttp()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+        try
+        {
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("wisland/0.1 (+https://github.com/AsamiAkito/wisland)");
+        }
+        catch { }
+        return http;
+    }
+
+    /// <summary>把底层异常转成用户能看懂的中文提示。</summary>
+    private static string FriendlyError(Exception ex)
+    {
+        var msg = ex.GetBaseException().Message ?? "";
+        if (msg.Contains("SSL", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("TLS", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("证书", StringComparison.OrdinalIgnoreCase))
+            return "网络 TLS 握手失败（系统证书/加密服务异常），天气无法获取。\n可尝试：用浏览器打开 api.open-meteo.com 确认网络，或检查系统时间与根证书。";
+        if (msg.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("超时", StringComparison.OrdinalIgnoreCase) ||
+            ex is TaskCanceledException)
+            return "获取天气超时，请检查网络连接。";
+        if (msg.Contains("resolve", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("名称", StringComparison.OrdinalIgnoreCase))
+            return "域名解析失败，请检查网络或 DNS。";
+        return $"天气获取失败：{msg}";
+    }
     private readonly Timer _timer;
     private readonly object _lock = new();
     private SynchronizationContext? _ui;
@@ -56,7 +89,7 @@ public class WeatherService : IWeatherService, IDisposable
         catch (Exception ex)
         {
             Debug.WriteLine($"[WeatherService] {ex}");
-            return new WeatherState { Ok = false, Error = ex.Message, City = _city, Time = DateTime.Now };
+            return new WeatherState { Ok = false, Error = FriendlyError(ex), City = _city, Time = DateTime.Now };
         }
     }
 
@@ -67,7 +100,7 @@ public class WeatherService : IWeatherService, IDisposable
         catch (Exception ex)
         {
             Debug.WriteLine($"[WeatherService] for {cityName}: {ex.Message}");
-            return new WeatherState { Ok = false, Error = ex.Message, City = cityName, Time = DateTime.Now };
+            return new WeatherState { Ok = false, Error = FriendlyError(ex), City = cityName, Time = DateTime.Now };
         }
     }
 

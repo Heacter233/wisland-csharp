@@ -60,6 +60,7 @@
 
     <!-- ============ 图标按钮（透明底 + 悬停圆） ============ -->
     <Style x:Key="IconBtn" TargetType="Button">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{DynamicResource AppText}"/>
         <Setter Property="BorderThickness" Value="0"/>
@@ -90,6 +91,7 @@
 
     <!-- ============ 胶囊按钮 ============ -->
     <Style x:Key="PillBtn" TargetType="Button">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="Background" Value="{DynamicResource AppCard}"/>
         <Setter Property="Foreground" Value="{DynamicResource AppText}"/>
         <Setter Property="BorderThickness" Value="0"/>
@@ -233,6 +235,7 @@
 
     <!-- ============ 输入框 ============ -->
     <Style x:Key="AppBox" TargetType="TextBox">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="Background" Value="{DynamicResource AppCard}"/>
         <Setter Property="Foreground" Value="{DynamicResource AppText}"/>
         <Setter Property="CaretBrush" Value="{DynamicResource AppText}"/>
@@ -261,6 +264,7 @@
 
     <!-- ============ 分段选择 ============ -->
     <Style x:Key="SegBtn" TargetType="RadioButton">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="Foreground" Value="{DynamicResource AppText2}"/>
         <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
         <Setter Property="FontSize" Value="12.5"/>

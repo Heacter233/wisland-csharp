@@ -25,6 +25,13 @@ public partial class SettingsPage : UserControl
         new() { Interval = TimeSpan.FromMilliseconds(600) };
     private bool _dirty;
 
+    /// <summary>
+    /// 滚动区是否铺不透明底板。
+    /// 系统模糊（DWM）模式下不需要 —— 底板会把真实背景模糊挡掉。
+    /// 抓屏/合成模式下保留，用来遮挡半透明内容滚动时的残影。
+    /// </summary>
+    public static bool SolidScrollPlate { get; set; }
+
     public SettingsPage()
     {
         InitializeComponent();
@@ -41,8 +48,8 @@ public partial class SettingsPage : UserControl
         _dirty = false;
 
         var cfg = ServiceHub.Config;
-        // 滚动区底板：接近不透明，消除半透明内容滚动时的残影
-        Host.Background = new SolidColorBrush(Themes.ScrollPlate());
+        // 系统模糊模式下不铺底板，才能真正透出背景
+        Host.Background = SolidScrollPlate ? new SolidColorBrush(Themes.ScrollPlate()) : null;
 
         // ===== 基础设置 =====
         var basic = AddSection("基础设置", "外观、交互与开机行为");

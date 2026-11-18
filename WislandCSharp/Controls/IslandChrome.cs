@@ -129,17 +129,41 @@ public sealed class IslandChrome : Panel
         }
     }
 
+    /// <summary>当前本体的圆角半径（与 BodyGeometry 中一致）。</summary>
+    public double BodyCornerRadius
+    {
+        get
+        {
+            var bw = Math.Max(40, _w.X);
+            var bh = Math.Max(24, _h.X);
+            var squash = 0.0;
+            if (_expanded || bh > 60) squash = Math.Min(30.0, bh / 2);
+            return _expanded ? squash : Math.Min(bh / 2, Math.Min(bw / 2, 30.0));
+        }
+    }
+
+    /// <summary>
+    /// 模糊区域相对本体的外扩量。
+    /// 取 0：accent 模糊是窗口矩形级的，而 SetWindowRgn 对分层窗口不生效（实测），
+    /// 外扩多少就会露出多少矩形亮边，所以窗口紧贴胶囊包围盒。
+    /// </summary>
+    public const double GlassRegionMargin = 0.0;
+
+    /// <summary>当前是否处于尺寸/内容动画中（供宿主降低开销用）。</summary>
+    public bool Animating { get; private set; }
+
     /// <summary>每帧推进；返回是否仍需继续动画。</summary>
     public bool Step(double dt)
     {
         foreach (var s in new[] { _w, _h, _compactA, _contentA, _poke }) s.Step(dt);
         var moving = !(_w.Rest && _h.Rest && _compactA.Rest && _contentA.Rest && _poke.Rest);
+        Animating = moving;
 
         if (_expanded && !_contentA.Rest)
             ExpandedHost.Opacity = ContentOpacity(_contentA.X);
+        Compact.Opacity = Anim.Clamp(_compactA.X, 0, 1);
 
         // 收起态内容：展开时淡出并隐藏，避免与页面内容叠画
-        Compact.Opacity = Anim.Clamp(_compactA.X, 0, 1);
         if (_expanded && _compactA.X < 0.02 && Compact.Visibility == Visibility.Visible)
             Compact.Visibility = Visibility.Collapsed;
         else if (Compact.Visibility == Visibility.Collapsed && (!_expanded || _compactA.Target > 0.5))
@@ -180,38 +204,68 @@ public sealed class IslandChrome : Panel
 
         // 两个子元素都测量（不能只测当前可见的，否则首次展开时页面尺寸为 0 → 空白）
         var inner = new Size(Math.Max(0, bw - Pad * 2), Math.Max(0, bh - Pad * 2));
+
+        // 展开内容按「目标尺寸」测量，而不是随动画变化的当前尺寸：
+        // 系统模糊模式下窗口会逐帧缩放，若按当前尺寸测量，
+        // 页面（卡片列表）每帧都要完整重新测量 → 收起动画中段明显卡顿。
+        if (_expanded)
+        {
+            var targetH = Math.Max(24, _h.Target);
+            var targetW = Math.Max(40, _w.Target);
+            inner = new Size(
+                Math.Max(inner.Width, targetW - Pad * 2),
+                Math.Max(inner.Height, targetH - Pad * 2));
+        }
+
         ExpandedHost.Measure(inner);
         Compact.Measure(new Size(bw, bh));
         return availableSize;
     }
+
+    /// <summary>
+    /// 让本体铺满窗口（窗口尺寸 = 本体 + FillMargin）。
+    /// 系统模糊模式下必须这样：accent 模糊是窗口矩形级的，只有窗口贴合胶囊，
+    /// 模糊才会跟着胶囊走；否则收起态会出现一大片矩形模糊。
+    /// </summary>
+    public bool FillWindow { get; set; }
+
+    /// <summary>FillWindow 模式下的四周边距（阴影落在其中）。</summary>
+    public double FillMargin { get; set; } = GlassRegionMargin;
 
     protected override Size ArrangeOverride(Size finalSize)
     {
         var bw = Math.Max(40, _w.X);
         var bh = Math.Max(24, _h.X);
 
-        // 窗口尺寸固定，本体按贴边方向放在窗口对应一侧
-        double x, y;
-        switch (AnchorEdge)
+        if (FillWindow)
         {
-            case "bottom":
-                x = (finalSize.Width - bw) / 2;
-                y = finalSize.Height - WindowPad - bh;
-                break;
-            case "left":
-                x = WindowPad;
-                y = (finalSize.Height - bh) / 2;
-                break;
-            case "right":
-                x = finalSize.Width - WindowPad - bw;
-                y = (finalSize.Height - bh) / 2;
-                break;
-            default: // top
-                x = (finalSize.Width - bw) / 2;
-                y = WindowPad;
-                break;
+            _bodyRect = new Rect(FillMargin, FillMargin, bw, bh);
         }
-        _bodyRect = new Rect(x, y, bw, bh);
+        else
+        {
+            // 窗口尺寸固定，本体按贴边方向放在窗口对应一侧
+            double x, y;
+            switch (AnchorEdge)
+            {
+                case "bottom":
+                    x = (finalSize.Width - bw) / 2;
+                    y = finalSize.Height - WindowPad - bh;
+                    break;
+                case "left":
+                    x = WindowPad;
+                    y = (finalSize.Height - bh) / 2;
+                    break;
+                case "right":
+                    x = finalSize.Width - WindowPad - bw;
+                    y = (finalSize.Height - bh) / 2;
+                    break;
+                default: // top
+                    x = (finalSize.Width - bw) / 2;
+                    y = WindowPad;
+                    break;
+            }
+            _bodyRect = new Rect(x, y, bw, bh);
+        }
 
         if (_expanded)
         {
@@ -305,8 +359,13 @@ public sealed class IslandChrome : Panel
         dc.PushClip(path);
         var r = _bodyRect;
 
-        var backdrop = Backdrop?.Brush;
-        if (backdrop != null)
+        var backdrop = SystemGlass ? null : Backdrop?.Brush;
+        if (SystemGlass)
+        {
+            // 模糊由 DWM 在窗口背后实时完成，这里只叠色调与光泽
+            dc.DrawRectangle(SystemGlassTint(), null, r);
+        }
+        else if (backdrop != null)
         {
             // 模糊层
             dc.DrawRectangle(backdrop, null, new Rect(0, 0, ActualWidth, ActualHeight));
@@ -347,6 +406,30 @@ public sealed class IslandChrome : Panel
                 Color.FromArgb(0, 255, 255, 255));
             dc.DrawGeometry(null, new Pen(new SolidColorBrush(rays(rad)), 1.0), path);
         }
+    }
+
+
+    /// <summary>系统级背景模糊（DWM accent）：真实实时模糊，不需要抓屏。</summary>
+    public bool SystemGlass { get; set; }
+
+    /// <summary>
+    /// 系统模糊模式下的色调。
+    /// alpha 不能太高，否则会把 DWM 的实时模糊完全盖住（看起来只是一块半透明色）。
+    /// </summary>
+    private static Brush SystemGlassTint()
+    {
+        var tint = Themes.Tint();
+        var a = (byte)(Themes.IsDark ? 150 : 140);
+        var c1 = Color.FromArgb(a, tint.R, tint.G, tint.B);
+        Color c2;
+        if (Themes.Current.Tint2 is { } t2)
+            c2 = Color.FromArgb(a, t2.R, t2.G, t2.B);
+        else
+            c2 = Color.FromArgb(a,
+                (byte)Math.Min(255, tint.R + 8),
+                (byte)Math.Min(255, tint.G + 8),
+                (byte)Math.Min(255, tint.B + 10));
+        return new LinearGradientBrush(c1, c2, new Point(0, 0), new Point(0.25, 1));
     }
 
     /// <summary>模糊层之上的主题色调（半透明，让玻璃有主题色但不遮死背景）。</summary>

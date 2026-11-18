@@ -510,8 +510,17 @@ public partial class WeatherPage : UserControl
         BtnAdd.Visibility = Visibility.Collapsed;
         AddBox.Visibility = Visibility.Visible;
         AddBox.Text = "";
-        AddBox.Focus();
-        Keyboard.Focus(AddBox);
+
+        // 输入框需要窗口处于激活状态才能拿到键盘焦点
+        try { Window.GetWindow(this)?.Activate(); } catch { }
+
+        // 同一轮里刚设为 Visible 的元素还不能聚焦，等布局完成后再抢焦点
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            AddBox.Focus();
+            Keyboard.Focus(AddBox);
+            AddBox.CaretIndex = AddBox.Text.Length;
+        }), DispatcherPriority.Input);
     }
 
     private async void AddBox_KeyDown(object sender, KeyEventArgs e)
@@ -540,11 +549,18 @@ public partial class WeatherPage : UserControl
         }
         _msgClear.Start();
         CancelAdd();
+        // 添加完成后主动释放键盘焦点，否则会残留一个虚线焦点框（分层窗口下尤其明显）
+        Keyboard.ClearFocus();
     }
 
     private void AddBox_LostFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (AddBox.Visibility == Visibility.Visible && AddBox.Text.Trim().Length == 0) CancelAdd();
+        // 不要在这里自动收起输入框：
+        // 刚点「+」时输入框刚显示、焦点还没落稳就会触发 LostFocus，
+        // 一收起用户就再也无法输入（表现为"输入框锁定"）。
+        // 收起交给 Enter / Esc 处理即可。
+        if (AddBox.Text.Trim().Length == 0 && Keyboard.FocusedElement == null)
+            CancelAdd();
     }
 
     private void CancelAdd()

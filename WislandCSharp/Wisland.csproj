@@ -10,6 +10,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\1002.ico</ApplicationIcon>
     <AssemblyName>Wisland</AssemblyName>
+    <!-- 本机仅安装 .NET 10 运行时：允许 net8.0 应用滚动到更高版本运行 -->
+    <RollForward>Major</RollForward>
   </PropertyGroup>
 
   <ItemGroup>

@@ -107,7 +107,28 @@ public partial class MainWindow : Window
     private bool _passthrough;
 
     private Backdrop? _backdrop;
-    private DateTime _lastFrame = DateTime.UtcNow;
+    private Border? _host;
+    private bool _dragging;    private DateTime _lastFrame = DateTime.UtcNow;
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+        int x, int y, int cx, int cy, uint flags);
+
+    private const uint SwpNoZorder = 0x0004;
+    private const uint SwpNoActivate = 0x0010;
+
+    private int _glassPx = int.MinValue, _glassPy, _glassPw, _glassPh;
+    private string _blurRgnKey = "";
+    private int _rgnW, _rgnH, _rgnR;
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("user32.dll")]
+    private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
     private DateTime _lastBackdropRequest = DateTime.MinValue;
     private DateTime _lastGlassRefresh = DateTime.MinValue;
     private bool _renderingHooked;
@@ -116,7 +137,13 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         BuildUi();
-        Loaded += (_, _) => { StartTicker(); _clockTimer.Start(); };
+        Loaded += (_, _) =>
+        {
+            StartTicker();
+            _clockTimer.Start();
+            // 窗口真正显示后再尝试一次：分层窗口在句柄刚创建时排除可能失败
+            _backdrop?.RetryExclude();
+        };
     }
 
     // ---------------- UI 构建 ----------------
@@ -155,6 +182,7 @@ public partial class MainWindow : Window
             Child = inner,
             Opacity = 0,
         };
+        _host = host;
 
         _chrome = new IslandChrome(_compact, host) { AnchorEdge = _edge };
         _backdrop = new Backdrop();
@@ -394,6 +422,21 @@ public partial class MainWindow : Window
         {
             if (ServiceHub.Config.Get("island.passthrough", false)) SetPassthrough(true);
         });
+
+        // 系统模糊玻璃（默认开启）。--legacy-glass 可回退到抓屏方案做对比。
+        Try("system-glass", () =>
+        {
+            var legacy = Array.Exists(Environment.GetCommandLineArgs(),
+                a => string.Equals(a, "--legacy-glass", StringComparison.OrdinalIgnoreCase));
+            if (legacy) return;
+
+            _chrome.SystemGlass = true;
+            _chrome.FillWindow = true;
+            Pages.SettingsPage.SolidScrollPlate = false;
+            SystemBlur.Apply(_hwnd, true);
+            SyncGlassWindowGeometry();
+            _chrome.InvalidateVisual();
+        });
     }
 
     protected override void OnMouseEnter(MouseEventArgs e)
@@ -451,6 +494,9 @@ public partial class MainWindow : Window
         var moving = _chrome.Step(dt);
         var navMoving = _nav.Step(dt);
 
+        // 系统模糊模式下窗口必须贴合胶囊：accent 模糊是窗口矩形级的
+        if (_chrome.SystemGlass) SyncGlassWindowGeometry();
+
         // 光标位置 → 收起态形变与形象视线
         var mouse = Mouse.GetPosition(_chrome);
         var body = _chrome.BodyRect;
@@ -476,16 +522,11 @@ public partial class MainWindow : Window
                 _compact.InvalidateVisual();
         }
 
-        // 背景模糊：窗口位置/尺寸不变时不必逐帧抓屏
-        if (_backdrop != null && (now - _lastBackdropRequest).TotalMilliseconds > 220)
+        // 背景模糊：仅在抓屏回退模式（--legacy-glass）下需要，系统模糊模式下完全不抓屏。
+        if (_backdrop != null && !_dragging && !_chrome.SystemGlass &&
+            (now - _lastBackdropRequest).TotalMilliseconds > 220)
         {
             _lastBackdropRequest = now;
-            // 展开态每秒强制重新抓一次：内容变化（滚动/切换）后玻璃底能及时刷新
-            if (_chrome.IsExpanded && (now - _lastGlassRefresh).TotalMilliseconds > 1000)
-            {
-                _lastGlassRefresh = now;
-                _backdrop.Invalidate();
-            }
             _backdrop.Request(ActualWidth > 1 ? ActualWidth : Width, ActualHeight > 1 ? ActualHeight : Height);
         }
     }
@@ -537,8 +578,10 @@ public partial class MainWindow : Window
     // ---------------- 窗口拖动 ----------------
     private void BeginDrag()
     {
+        _dragging = true;
         try { DragMove(); }
         catch { }
+        finally { _dragging = false; }
         // 拖动结束后按最近边吸附
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -559,7 +602,8 @@ public partial class MainWindow : Window
             ServiceHub.Config.Set("island.edge", _edge);
             ServiceHub.Config.Set("island.pos", Math.Round(_pos, 4));
             _chrome.AnchorEdge = _edge;
-            PositionWindow();
+            if (_chrome.SystemGlass) SyncGlassWindowGeometry();
+            else PositionWindow();
         }));
     }
 
@@ -679,9 +723,15 @@ public partial class MainWindow : Window
 
         Left = Math.Round(bodyLeft - bodyOffX);
         Top = Math.Round(bodyTop - bodyOffY);
+        // 窗口位置变了 → 背后的桌面也变了，请求重新抓一次背景
+        _backdrop?.Invalidate();
     }
     /// <summary>兼容旧调用名。</summary>
-    private void ApplyAnchor() => PositionWindow();
+    private void ApplyAnchor()
+    {
+        if (_chrome.SystemGlass) SyncGlassWindowGeometry();
+        else PositionWindow();
+    }
 
     // ---------------- 托盘 ----------------
     private void InitializeTray()
@@ -1014,6 +1064,129 @@ public partial class MainWindow : Window
         }
         return (mod, vk);
     }
+
+    // ---------------- 毛玻璃调试开关（--glass-debug） ----------------
+
+    /// <summary>
+    /// 系统模糊模式下让窗口贴合胶囊（窗口 = 胶囊 + 边距）。
+    ///
+    /// 原因：accent 模糊是窗口矩形级的，而且 SetWindowRgn 对分层窗口无效（实测 getKind=0），
+    /// 只能靠"窗口本身跟着胶囊变"让模糊跟随形状。
+    /// 窗口保持分层（AllowsTransparency），因此抗锯齿圆角与外阴影都不受影响。
+    /// </summary>
+    private void SyncGlassWindowGeometry()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+
+        var (bw, bh) = _chrome.BodySize;
+        var m = IslandChrome.GlassRegionMargin;
+
+        // 整数量化：亚像素级的宽/位变化会让窗口左右来回抖 1px（60fps 下就是"疯狂跳动"）
+        var winW = (int)Math.Round(bw + 2 * m);
+        var winH = (int)Math.Round(bh + 2 * m);
+        var bodyW = (int)Math.Round(bw);
+
+        var wa = WorkAreaDip();
+        double bodyLeft, bodyTop;
+        switch (_edge)
+        {
+            case "bottom":
+                bodyLeft = wa.Left + wa.Width * _pos - bodyW / 2.0;
+                bodyTop = wa.Bottom - bh;
+                break;
+            case "left":
+                bodyLeft = wa.Left;
+                bodyTop = wa.Top + wa.Height * _pos - bh / 2;
+                break;
+            case "right":
+                bodyLeft = wa.Right - bodyW;
+                bodyTop = wa.Top + wa.Height * _pos - bh / 2;
+                break;
+            default:
+                bodyLeft = wa.Left + wa.Width * _pos - bodyW / 2.0;
+                bodyTop = wa.Top;
+                break;
+        }
+
+        var left = (int)Math.Round(bodyLeft - m);
+        var top = (int)Math.Round(bodyTop - m);
+
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var sx = dpi.DpiScaleX <= 0 ? 1 : dpi.DpiScaleX;
+        var sy = dpi.DpiScaleY <= 0 ? 1 : dpi.DpiScaleY;
+        var px = (int)Math.Round(left * sx);
+        var py = (int)Math.Round(top * sy);
+        var pw = (int)Math.Round(winW * sx);
+        var ph = (int)Math.Round(winH * sy);
+
+        // 只在整数结果变化时才动窗口
+        if (px == _glassPx && py == _glassPy && pw == _glassPw && ph == _glassPh) return;
+        _glassPx = px; _glassPy = py; _glassPw = pw; _glassPh = ph;
+
+        // 位置与尺寸一次性设置，避免"先改宽再改左"的中间帧导致左右抖动
+        SetWindowPos(_hwnd, IntPtr.Zero, px, py, pw, ph,
+            SwpNoZorder | SwpNoActivate);
+    }
+
+    /// <summary>
+    /// 把窗口区域切成"圆角矩形"（= 药丸外扩 8px）。
+    ///
+    /// 目的：accent 模糊铺满整个窗口矩形，若窗口是方角，
+    /// 药丸四个角外侧也会被模糊 → 看起来像有个矩形底板。
+    /// 改用圆角窗口区域后，模糊也跟着变成圆角。
+    /// </summary>
+    private void ApplyRoundedWindowRegion(int pw, int ph)
+    {
+        if (_hwnd == IntPtr.Zero || pw < 2 || ph < 2) return;
+
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var scale = Math.Min(dpi.DpiScaleX <= 0 ? 1 : dpi.DpiScaleX,
+                             dpi.DpiScaleY <= 0 ? 1 : dpi.DpiScaleY);
+        var radius = (int)Math.Round((_chrome.BodyCornerRadius + IslandChrome.GlassRegionMargin) * scale);
+        radius = Math.Clamp(radius, 1, Math.Min(pw, ph) / 2);
+
+        if (pw == _rgnW && ph == _rgnH && radius == _rgnR) return;
+
+        var rgn = CreateRoundRectRgn(0, 0, pw + 1, ph + 1, radius * 2, radius * 2);
+        if (rgn == IntPtr.Zero) return;
+        if (SetWindowRgn(_hwnd, rgn, true) == 0)
+        {
+            // 设置失败：区域句柄仍归我们，需自行释放
+            DeleteObject(rgn);
+            return;
+        }
+        _rgnW = pw; _rgnH = ph; _rgnR = radius;
+    }
+
+    /// <summary>
+    /// 把 DWM 模糊限制在胶囊形状内（窗口坐标）。
+    /// 不做的话，窗口四周边距同样会被模糊 → 药丸外出现一圈亮矩形。
+    /// </summary>
+    private void UpdateBlurRegion()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+
+        var body = _chrome.BodyRect;
+        if (body.Width < 1 || body.Height < 1) return;
+
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var sx = dpi.DpiScaleX <= 0 ? 1 : dpi.DpiScaleX;
+        var sy = dpi.DpiScaleY <= 0 ? 1 : dpi.DpiScaleY;
+
+        var x = (int)Math.Round(body.X * sx);
+        var y = (int)Math.Round(body.Y * sy);
+        var w = (int)Math.Round(body.Width * sx);
+        var h = (int)Math.Round(body.Height * sy);
+        var r = (int)Math.Round(_chrome.BodyCornerRadius * Math.Min(sx, sy));
+
+        var key = $"{x},{y},{w},{h},{r}";
+        if (key == _blurRgnKey) return;
+        _blurRgnKey = key;
+
+        var rgn = CreateRoundRectRgn(x, y, x + w + 1, y + h + 1, r * 2, r * 2);
+        SystemBlur.SetBlurRegion(_hwnd, rgn);
+    }
+
 
     // ---------------- 毛玻璃 ----------------
     private static void Try(string name, Action action)
