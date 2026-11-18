@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Wisland.Theme;
 
 namespace Wisland.Controls;
@@ -50,6 +51,33 @@ public sealed class IslandChrome : Panel
 
     /// <summary>插件自定义通知动画（在胶囊内绘制，参数：绘制上下文、可用区域、经过秒数）。</summary>
     public Action<DrawingContext, Rect, double>? NotifyCustomDraw { get; private set; }
+
+    private ImageSource? _notifyImage;
+    private string _notifyImagePath = "";
+
+    /// <summary>设置插件通知图片（绝对路径；传空清除）。加载失败静默忽略。</summary>
+    public void SetNotifyImage(string? path)
+    {
+        if (string.Equals(path ?? "", _notifyImagePath, StringComparison.OrdinalIgnoreCase)) return;
+        _notifyImagePath = path ?? "";
+        _notifyImage = null;
+        if (_notifyImagePath.Length > 0)
+        {
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri(_notifyImagePath, UriKind.Absolute);
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                _notifyImage = bmp;
+            }
+            catch { _notifyImage = null; }
+        }
+        RetargetCompact();      // 图片占用右侧区域，需要重新算宽度
+        InvalidateVisual();
+    }
     private Point _pressPoint = new(-1, -1);
     private DateTime _t0 = DateTime.UtcNow;
 
@@ -206,6 +234,8 @@ public sealed class IslandChrome : Panel
             w += Math.Min(220, ApproxTextWidth(_notifyTicker) + 28);
         if (!NotifyTickerMode && _notifyLines.Count > 0)
             h += _notifyLines.Count * 18 + 8;
+        if (NotifyCustomDraw != null || _notifyImage != null)
+            w += 112;                                     // 右侧自定义动画/图片区域
         return (w, h);
     }
 
@@ -390,7 +420,19 @@ public sealed class IslandChrome : Panel
         }
         else
         {
-            Compact.Arrange(_bodyRect);
+            // 收起态若有提示（滚动/弹出），内置内容保持原尺寸并贴左上，
+            // 避免它被拉伸到加宽/加高后的整块本体、把天气挤到滚动文字上（实测会重叠）。
+            var compactRect = _bodyRect;
+            if ((NotifyTickerMode && _notifyTicker.Length > 0) || _notifyLines.Count > 0)
+            {
+                var (baseW, baseH) = Compact.SizeHint();
+                compactRect = new Rect(
+                    _bodyRect.X,
+                    _bodyRect.Y,
+                    Math.Min(_bodyRect.Width, baseW),
+                    Math.Min(_bodyRect.Height, baseH));
+            }
+            Compact.Arrange(compactRect);
             ExpandedHost.Arrange(_bodyRect);
         }
         return finalSize;
@@ -560,8 +602,8 @@ public sealed class IslandChrome : Panel
             if (NotifyUnread > 0)
             {
                 var dotR = 3.6;
-                var cx = r.Right - 11;
-                var cy = r.Top + 9;
+                var cx = r.Right - 14;
+                var cy = r.Top + 12;
                 dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E)), null,
                     new Point(cx, cy), dotR, dotR);
             }
@@ -604,14 +646,26 @@ public sealed class IslandChrome : Panel
                 }
             }
 
-            // 插件自定义动画：绘制在胶囊内右侧区域
-            if (NotifyCustomDraw != null)
+            // 插件自定义动画 / 图片：绘制在胶囊内右侧新增区域
+            var customArea = new Rect(r.Right - 120, r.Top + 4, 108, r.Height - 8);
+            if (customArea.Width > 20 && customArea.Height > 8)
             {
-                var area = new Rect(r.Right - 120, r.Top + 4, 108, r.Height - 8);
-                if (area.Width > 20 && area.Height > 8)
+                if (NotifyCustomDraw != null)
                 {
                     var t = (DateTime.UtcNow - _t0).TotalSeconds;
-                    try { NotifyCustomDraw(dc, area, t); } catch { }
+                    try { NotifyCustomDraw(dc, customArea, t); } catch { }
+                }
+                else if (_notifyImage is { } img && img.Width > 0 && img.Height > 0)
+                {
+                    // 等比缩放居中
+                    var scale = Math.Min(customArea.Width / img.Width, customArea.Height / img.Height);
+                    var w = img.Width * scale;
+                    var h = img.Height * scale;
+                    var rect = new Rect(
+                        customArea.X + (customArea.Width - w) / 2,
+                        customArea.Y + (customArea.Height - h) / 2,
+                        w, h);
+                    dc.DrawImage(img, rect);
                 }
             }
         }

@@ -147,6 +147,7 @@ public partial class MainWindow : Window
         {
             ServiceHub.Inbox.Changed += OnInboxNotifyChanged;
             _notifyTimer.Tick += (_, _) => AdvanceNotify();
+            _notifySweep.Tick += (_, _) => SweepPopupLines();
             _chrome.NotifyTickerMode = NotifyTickerStyle;
             _chrome.SetUnread(ServiceHub.Inbox.UnreadCount());
             // 启动时可能已有未读（例如 --inbox-demo 提前推的），补一次
@@ -636,6 +637,20 @@ public partial class MainWindow : Window
                 Time = DateTime.Now,
             });
 
+            // 演示"同时多条"与"图片通知"
+            for (var i = 1; i <= 3; i++)
+            {
+                ServiceHub.Inbox.Push(new Services.PluginMessage
+                {
+                    Source = "burst",
+                    SourceName = "批量通知",
+                    Title = $"第 {i} 条",
+                    Body = $"同时到达的消息 {i}",
+                    Level = "info",
+                    IconGlyph = "\uE8BD",
+                    IconColor = "#7B61FF",
+                });
+            }
             // 再塞 7 个来源，用来验证"磁贴两行 + 滚轮查找 + 右键置顶"
             var demo = new (string Src, string Name, string Glyph, string Color)[]
             {
@@ -658,6 +673,23 @@ public partial class MainWindow : Window
                     Level = "info",
                     IconGlyph = glyph,
                     IconColor = color,
+                });
+            }
+
+            // 最后推一条带图片的（提示区展示的是最新一条消息的自定义动画/图片）
+            var demoImg = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "FF14DJJ.jpg");
+            if (System.IO.File.Exists(demoImg))
+            {
+                ServiceHub.Inbox.Push(new Services.PluginMessage
+                {
+                    Source = "pic",
+                    SourceName = "图片通知",
+                    Title = "带图片的消息",
+                    Body = "插件自带图片",
+                    IconGlyph = "\uE91B",
+                    IconColor = "#22C55E",
+                    NotifyImage = demoImg,
                 });
             }
         });
@@ -740,14 +772,61 @@ public partial class MainWindow : Window
                     var body = string.IsNullOrWhiteSpace(msg.Body) ? msg.Title
                              : string.IsNullOrWhiteSpace(msg.Title) ? msg.Body
                              : $"{msg.Title} · {msg.Body}";
+                    var text = $"{msg.DisplaySource}  {body}";
                     var draw = allowCustom ? msg.NotifyDraw : null;
-                    _notifyQueue.Enqueue(($"{msg.DisplaySource}  {body}", draw));
+                    var image = allowCustom && draw == null ? msg.NotifyImage : null;
+
+                    if (NotifyTickerStyle)
+                    {
+                        _notifyQueue.Enqueue((text, draw));
+                    }
+                    else
+                    {
+                        // 弹出模式：同时到达的多条一次排开（最多 3 行），超出顶掉最旧的一条
+                        while (_popupLineTimes.Count >= 3)
+                        {
+                            _chrome.PopNotifyLine();
+                            _popupLineTimes.RemoveAt(0);
+                        }
+                        _chrome.PushNotifyLine(text, draw);
+                        _chrome.SetNotifyImage(image);
+                        _popupLineTimes.Add(DateTime.Now);
+                    }
                 }
 
-                if (!_notifyShowing) AdvanceNotify();
+                if (NotifyTickerStyle && !_notifyShowing) AdvanceNotify();
+                else if (!NotifyTickerStyle && _popupLineTimes.Count > 0) _notifySweep.Start();
             }
             catch (Exception ex) { App.LogCrash("notify-ui", ex); }
         }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>弹出模式：把超过停留时长的行逐条收起（最早的一行先收）。</summary>
+    private void SweepPopupLines()
+    {
+        try
+        {
+            var duration = NotifyDurationMs;
+            var removed = false;
+            while (_popupLineTimes.Count > 0 &&
+                   (DateTime.Now - _popupLineTimes[0]).TotalMilliseconds >= duration)
+            {
+                _chrome.PopNotifyLine();
+                _popupLineTimes.RemoveAt(0);
+                removed = true;
+            }
+            if (_popupLineTimes.Count == 0)
+            {
+                _notifySweep.Stop();
+                _chrome.SetNotifyImage(null);
+            }
+            else if (removed)
+            {
+                _notifySweep.Stop();
+                _notifySweep.Start();
+            }
+        }
+        catch (Exception ex) { App.LogCrash("notify-sweep", ex); }
     }
 
     /// <summary>展示下一条；队列空则收起提示。</summary>
@@ -893,9 +972,12 @@ public partial class MainWindow : Window
 
         // 展开后提示区没有意义，先清掉
         _notifyQueue.Clear();
+        _popupLineTimes.Clear();
+        _notifySweep.Stop();
         _notifyTimer.Stop();
         _notifyShowing = false;
         _chrome.ClearNotify();
+        _chrome.SetNotifyImage(null);
 
         _chrome.Expand();
 
@@ -1477,6 +1559,11 @@ public partial class MainWindow : Window
     private readonly System.Windows.Threading.DispatcherTimer _notifyTimer =
         new() { Interval = TimeSpan.FromMilliseconds(4000) };
     private bool _notifyShowing;
+
+    // 弹出模式：每一行的到达时间（与 chrome 中显示的行一一对应），到时间逐条收起
+    private readonly List<DateTime> _popupLineTimes = new();
+    private readonly System.Windows.Threading.DispatcherTimer _notifySweep =
+        new() { Interval = TimeSpan.FromMilliseconds(200) };
 
     /// <summary>本体尺寸是否已经到目标（用于尽早恢复 DWM 模糊）。</summary>
     private bool SizeSettled()
