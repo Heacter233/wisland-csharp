@@ -454,13 +454,14 @@ public partial class MainWindow : Window
             _chrome.CornerFogAlpha = (byte)Math.Clamp(fogAlpha, 0, 255);
             _chrome.FillWindow = true;
             Pages.SettingsPage.SolidScrollPlate = false;
-            // accent 模式：亚克力（state 4）是唯一在 Win10 19045 上真正出模糊的；
-            // 经典 blur-behind（state 3）在分层窗口上只会把窗口矩形铺成黑色。
-            var variant = Environment.GetEnvironmentVariable("WISLAND_GLASS_VARIANT") ?? "acrylic";
-            if (string.Equals(variant, "blur", StringComparison.OrdinalIgnoreCase))
-                SystemBlur.Apply(_hwnd, true);
-            else
-                SystemBlur.Apply(_hwnd, true, acrylic: true);
+            // accent 变体：
+            //   blur（默认，state 3）= ACCENT_ENABLE_BLURBEHIND，真实模糊。
+            //       注意：DWM 的这层模糊**不会被 BitBlt 抓屏捕获**（截图里显示为黑色），
+            //       所以只能用眼睛验证，不能用截图判断。
+            //   acrylic（state 4）= 只有透明+色调，实测没有可见模糊。
+            var variant = Environment.GetEnvironmentVariable("WISLAND_GLASS_VARIANT")
+                          ?? ServiceHub.Config.Get("island.glass_accent", "blur");
+            ApplyAccent(!string.Equals(variant, "acrylic", StringComparison.OrdinalIgnoreCase));
             SyncGlassWindowGeometry();
             _chrome.InvalidateVisual();
         });
@@ -1107,6 +1108,15 @@ public partial class MainWindow : Window
 
     private bool _glassAnimating;
 
+    /// <summary>当前 accent 变体（true = 经典 blur-behind 真模糊；false = 亚克力）。</summary>
+    private bool _glassBlurBehind = true;
+
+    private void ApplyAccent(bool blurBehind)
+    {
+        _glassBlurBehind = blurBehind;
+        SystemBlur.Apply(_hwnd, true, acrylic: !blurBehind);
+    }
+
     /// <summary>
     /// 动画期间的玻璃窗口处理。
     /// 动画中：禁用 accent（避免每帧重新合成），窗口尺寸取"当前/目标尺寸的包络"，只设一次；
@@ -1136,7 +1146,7 @@ public partial class MainWindow : Window
         _glassAnimating = false;
         _chrome.CenterBody = false;
         SyncGlassWindowGeometry();
-        SystemBlur.Apply(_hwnd, true, acrylic: true);
+        ApplyAccent(_glassBlurBehind);
     }
 
     /// <summary>把窗口贴到给定本体尺寸上（系统模糊模式用，窗口矩形=模糊矩形）。</summary>
