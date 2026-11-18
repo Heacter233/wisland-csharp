@@ -409,11 +409,83 @@ public sealed class IslandChrome : Panel
                 Color.FromArgb(0, 255, 255, 255));
             dc.DrawGeometry(null, new Pen(new SolidColorBrush(rays(rad)), 1.0), path);
         }
+
+        // 5) 四角雾化：把矩形模糊在药丸圆角外露出的四块盖住
+        DrawCornerFog(dc, path);
+    }
+
+    /// <summary>
+    /// 药丸圆角外侧的四块区域（窗口矩形 − 药丸）用雾遮住。
+    ///
+    /// 径向渐变以窗口角为圆心：角上淡、靠近药丸浓，
+    /// 于是玻璃边缘像"雾化散开"，而不是被一刀切成方角。
+    /// </summary>
+    private void DrawCornerFog(DrawingContext dc, Geometry pillPath)
+    {
+        if (!CornerFog) return;
+
+        var w = ActualWidth;
+        var h = ActualHeight;
+        if (w < 8 || h < 8) return;
+
+        var r = Math.Max(2, BodyCornerRadius);
+        var rr = r * 2.0;
+        var tint = Themes.Tint();
+        // 只做"极轻"遮盖：目的不是把四角涂成玻璃，而是让模糊矩形的硬边界
+        // 不至于在白底/照片背景上露成一块方形。太重会变成四块黑角（实测过）。
+        var peak = Themes.IsDark ? (byte)64 : (byte)52;
+        var edge = (byte)(peak * 0.35);
+
+        var outside = new CombinedGeometry(
+            GeometryCombineMode.Exclude,
+            new RectangleGeometry(new Rect(0, 0, w, h)),
+            pillPath);
+
+        dc.PushClip(outside);
+        try
+        {
+            var corners = new[]
+            {
+                new Point(0, 0),
+                new Point(w, 0),
+                new Point(0, h),
+                new Point(w, h),
+            };
+
+            foreach (var c in corners)
+            {
+                var brush = new RadialGradientBrush
+                {
+                    MappingMode = BrushMappingMode.Absolute,
+                    Center = c,
+                    GradientOrigin = c,
+                    RadiusX = rr,
+                    RadiusY = rr,
+                };
+                // 0 = 窗口角（模糊矩形的硬边界处），1 = 靠近药丸
+                brush.GradientStops.Add(new GradientStop(Color.FromArgb(edge, tint.R, tint.G, tint.B), 0.0));
+                brush.GradientStops.Add(new GradientStop(Color.FromArgb((byte)(peak * 0.75), tint.R, tint.G, tint.B), 0.45));
+                brush.GradientStops.Add(new GradientStop(Color.FromArgb(peak, tint.R, tint.G, tint.B), 0.85));
+                brush.GradientStops.Add(new GradientStop(Color.FromArgb(peak, tint.R, tint.G, tint.B), 1.0));
+
+                var left = c.X <= 0.5 ? 0 : w - rr;
+                var top = c.Y <= 0.5 ? 0 : h - rr;
+                dc.DrawRectangle(brush, null, new Rect(left, top, rr, rr));
+            }
+        }
+        finally { dc.Pop(); }
     }
 
 
     /// <summary>系统级背景模糊（DWM accent）：真实实时模糊，不需要抓屏。</summary>
     public bool SystemGlass { get; set; }
+
+    /// <summary>
+    /// 四角雾化遮盖：系统模糊（accent）的作用域是窗口矩形，
+    /// 药丸圆角外侧那四块"本不该有玻璃"的区域会带上矩形模糊。
+    /// 打开后用一层雾把这几块盖住，模糊边界就不会露成方角。
+    /// </summary>
+    public bool CornerFog { get; set; }
 
     /// <summary>
     /// 药丸外的雾状柔边宽度（DIP）。0 = 关闭。

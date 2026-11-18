@@ -104,7 +104,7 @@ public static class SystemBlur
     /// <param name="on">是否启用</param>
     /// <param name="acrylic">true = 亚克力（带噪点纹理），false = 经典高斯模糊</param>
     /// <param name="tintAbgr">叠加色调（ABGR，alpha 建议 0x20~0x60，太大看不到模糊）</param>
-    public static bool Apply(IntPtr hwnd, bool on, bool acrylic = false, int tintAbgr = 0x00000000)
+    public static bool Apply(IntPtr hwnd, bool on, bool acrylic = false, int tintAbgr = 0x00000000, int accentFlags = 0)
     {
         if (hwnd == IntPtr.Zero) return false;
 
@@ -115,7 +115,7 @@ public static class SystemBlur
         var policy = new AccentPolicy
         {
             AccentState = (int)state,
-            AccentFlags = 0,
+            AccentFlags = accentFlags,
             GradientColor = tintAbgr,
             AnimationId = 0,
         };
