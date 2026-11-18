@@ -424,11 +424,22 @@ public partial class MainWindow : Window
         });
 
         // 系统模糊玻璃（默认开启）。--legacy-glass 可回退到抓屏方案做对比。
-        Try("system-glass", () =>
+        Try("glass-mode", () =>
         {
-            var legacy = Array.Exists(Environment.GetCommandLineArgs(),
-                a => string.Equals(a, "--legacy-glass", StringComparison.OrdinalIgnoreCase));
-            if (legacy) return;
+            // 默认：抓屏模糊（形状完美，真实背景）。
+            // DWM accent 模糊在 Win10 19045 + 分层窗口上实测只把窗口矩形铺成黑色（不是模糊），
+            // 而且方角会把药丸四角涂黑 → 改为需要显式开启的实验模式。
+            var wantSystem =
+                Array.Exists(Environment.GetCommandLineArgs(),
+                    a => string.Equals(a, "--system-glass", StringComparison.OrdinalIgnoreCase)) ||
+                string.Equals(ServiceHub.Config.Get("island.glass", "capture"), "system",
+                    StringComparison.OrdinalIgnoreCase);
+
+            // 药丸外雾状柔边：抓屏模式下窗口留了边距，有地方画；
+            // 系统模糊模式窗口贴合药丸（无外边距），画了会被裁掉且无意义。
+            _chrome.HaloWidth = wantSystem ? 0 : 12;
+
+            if (!wantSystem) return;
 
             _chrome.SystemGlass = true;
             _chrome.FillWindow = true;
@@ -1126,6 +1137,8 @@ public partial class MainWindow : Window
         // 位置与尺寸一次性设置，避免"先改宽再改左"的中间帧导致左右抖动
         SetWindowPos(_hwnd, IntPtr.Zero, px, py, pw, ph,
             SwpNoZorder | SwpNoActivate);
+
+        // 实验：DWM 区域限制（DWM_BB_BLURREGION）能否裁掉窗口矩形级的 accent 模糊
     }
 
     /// <summary>

@@ -347,6 +347,9 @@ public sealed class IslandChrome : Panel
         if (_bodyRect.Width < 10) return;
         var path = BodyGeometry();
 
+        // 0) 药丸外的雾状柔边：主题色由内向外快速淡出，柔化玻璃与背景的接缝
+        DrawHalo(dc, path);
+
         // 1) 阴影（几层半透明描边近似）
         for (var i = 0; i < 3; i++)
         {
@@ -413,9 +416,48 @@ public sealed class IslandChrome : Panel
     public bool SystemGlass { get; set; }
 
     /// <summary>
+    /// 药丸外的雾状柔边宽度（DIP）。0 = 关闭。
+    /// 一圈由内向外迅速变淡的主题色描边，用来把玻璃边界"雾化"，
+    /// 让药丸像是从背景里凝出来，而不是硬贴上去的实心块。
+    /// </summary>
+    public double HaloWidth { get; set; }
+
+    /// <summary>
     /// 系统模糊模式下的色调。
     /// alpha 不能太高，否则会把 DWM 的实时模糊完全盖住（看起来只是一块半透明色）。
     /// </summary>
+    /// <summary>
+    /// 药丸外的雾状柔边。
+    ///
+    /// 做法：以药丸形状为中心画一圈同心描边，宽度递增、透明度按幂律衰减，
+    /// 于是药丸外侧出现一段"雾"，越远越淡直到完全消失。
+    /// 相比抓屏/系统模糊，这一层完全由我们绘制：形状永远跟着药丸走，
+    /// 不会出现方角，也不会因为残影而闪。
+    /// </summary>
+    private void DrawHalo(DrawingContext dc, Geometry path)
+    {
+        var w = HaloWidth;
+        if (w < 0.5) return;
+
+        var tint = Themes.Tint();
+        var peak = Themes.IsDark ? 132 : 96;
+        const int steps = 9;
+
+        for (var i = 0; i < steps; i++)
+        {
+            var t = (i + 1) / (double)steps;          // 0 → 贴近药丸，1 → 最外
+            var stroke = 2.0 + t * w * 2.0;           // 居中描边 → 外扩 = stroke / 2
+            var alpha = (byte)Math.Round(Math.Pow(1 - t, 2.2) * peak);
+            if (alpha == 0) continue;
+            var color = Color.FromArgb(alpha, tint.R, tint.G, tint.B);
+            dc.DrawGeometry(null, new Pen(new SolidColorBrush(color), stroke), path);
+        }
+
+        // 内侧再叠一层极淡的白雾，让边缘有"毛玻璃凝霜"的质感
+        var fogColor = Color.FromArgb(Themes.IsDark ? (byte)16 : (byte)34, 255, 255, 255);
+        dc.DrawGeometry(null, new Pen(new SolidColorBrush(fogColor), w * 0.9), path);
+    }
+
     private static Brush SystemGlassTint()
     {
         var tint = Themes.Tint();
