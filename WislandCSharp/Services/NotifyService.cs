@@ -379,28 +379,10 @@ public sealed class NotifyService : IDisposable
     /// <summary>打开对应程序（config.json → notify.open.qq / wechat / mail）。</summary>
     public void Open(string kind)
     {
-        var path = _config.Get($"notify.open.{kind}", "");
-        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
-        {
-            try
-            {
-                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-                return;
-            }
-            catch { }
-        }
-        try
-        {
-            var uri = kind switch
-            {
-                "mail" => "mailto:",
-                "qq" => "tencent://",
-                "wechat" => "weixin://",
-                _ => "",
-            };
-            if (uri.Length > 0) Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
-        }
-        catch (Exception ex) { Debug.WriteLine($"[NotifyService] Open: {ex.Message}"); }
+        var configured = _config.Get($"notify.open.{kind}", "");
+        // 配置路径 → 运行中进程 → 已知安装路径 → 开始菜单快捷方式 → 卸载注册表 → URI 协议
+        // （只靠 tencent:// / weixin:// 在多数机器上没注册，点了会毫无反应）
+        AppLauncher.Launch(kind, configured);
     }
 
     public void Dispose()

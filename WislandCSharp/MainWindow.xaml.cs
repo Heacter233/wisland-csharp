@@ -570,6 +570,21 @@ public partial class MainWindow : Window
         // 系统模糊玻璃（默认开启）。--legacy-glass 可回退到抓屏方案做对比。
         Try("glass-mode", ApplyGlassMode);
 
+        // 调试：--open-test=qq|wechat|mail 验证"磁贴点击打开程序"的兜底链路
+        Try("open-test", () =>
+        {
+            foreach (var arg in Environment.GetCommandLineArgs())
+            {
+                if (!arg.StartsWith("--open-test=", StringComparison.OrdinalIgnoreCase)) continue;
+                var kind = arg["--open-test=".Length..];
+                var ok = Services.AppLauncher.Launch(kind,
+                    ServiceHub.Config.Get($"notify.open.{kind}", ""));
+                System.IO.File.AppendAllText(
+                    System.IO.Path.Combine(Services.AppPaths.DataDir, "app-launch.log"),
+                    $"{DateTime.Now:HH:mm:ss.fff} [open-test] result={ok}{Environment.NewLine}");
+            }
+        });
+
         // 调试：--inbox-demo 推两条示例消息，用来验证消息页的插件推送通道
         Try("inbox-demo", () =>
         {
