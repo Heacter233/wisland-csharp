@@ -596,6 +596,20 @@ public partial class MainWindow : Window
                 IconColor = "#FB7299",
                 Uri = "https://www.bilibili.com",
             });
+            // 演示"系统通知 → Inbox"：Emit 两条系统通知，验证镜像与磁贴
+            ServiceHub.Notify.Emit(new Services.NotifyItem
+            {
+                Kind = "qq", App = "QQ", Name = "QQ",
+                Title = "QQ 群消息", Body = "[演示] 系统通知已镜像到消息页",
+                Time = DateTime.Now,
+            });
+            ServiceHub.Notify.Emit(new Services.NotifyItem
+            {
+                Kind = "wechat", App = "WeChat", Name = "微信",
+                Title = "微信消息", Body = "[演示] 系统通知已镜像到消息页",
+                Time = DateTime.Now,
+            });
+
             // 再塞 7 个来源，用来验证"磁贴两行 + 滚轮查找 + 右键置顶"
             var demo = new (string Src, string Name, string Glyph, string Color)[]
             {

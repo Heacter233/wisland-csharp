@@ -32,6 +32,12 @@ public sealed class PluginMessage
     /// </summary>
     public string? IconColor { get; init; }
 
+    /// <summary>
+    /// 内置类型标识（qq / wechat / mail）：点磁贴时会打开对应程序。
+    /// 插件消息留空即可。
+    /// </summary>
+    public string? Kind { get; init; }
+
     /// <summary>点击条目要打开的链接（可选）。</summary>
     public string? Uri { get; init; }
 

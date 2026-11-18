@@ -80,6 +80,19 @@ public partial class MessagesPage : UserControl
         return null;
     }
 
+    /// <summary>系统通知是否镜像进 Inbox（开启时消息页只读 Inbox，避免重复显示）。</summary>
+    private static bool NotifyToInbox
+    {
+        get
+        {
+            try { return Services.ServiceHub.Config.Get("island.notify_to_inbox", true); }
+            catch { return true; }
+        }
+    }
+
+    private static bool IsBuiltInSource(string source) =>
+        source is "qq" or "wechat" or "mail";
+
     private void LoadPinned()
     {
         _pinned.Clear();
@@ -112,10 +125,14 @@ public partial class MessagesPage : UserControl
     {
         BuildTiles();
 
-        // 合并：系统通知 + 插件推送（按时间倒序，最多 30 条）
+        // 合并：系统通知 + 插件推送（按时间倒序）
+        // 开启 island.notify_to_inbox 时系统通知已经镜像进 Inbox，只读 Inbox 即可（否则重复）
         var rows = new List<MsgRow>();
-        foreach (var h in Services.ServiceHub.Notify.History)
-            rows.Add(new MsgRow(h.Name, h.Description, h.Time, KindColors.Get(h.Kind), h.Kind, null));
+        if (!NotifyToInbox)
+        {
+            foreach (var h in Services.ServiceHub.Notify.History)
+                rows.Add(new MsgRow(h.Name, h.Description, h.Time, KindColors.Get(h.Kind), h.Kind, null));
+        }
         foreach (var m in Services.ServiceHub.Inbox.Items)
         {
             var desc = string.IsNullOrWhiteSpace(m.Body) ? m.Title
@@ -153,21 +170,38 @@ public partial class MessagesPage : UserControl
     {
         TilesPanel.Children.Clear();
 
-        var notify = Services.ServiceHub.Notify;
-        foreach (var (kind, name, glyph, color) in BuiltInTiles)
-        {
-            var count = notify.Counts.GetValueOrDefault(kind);
-            var latest = notify.History.FirstOrDefault(h => h.Kind == kind);
-            TilesPanel.Children.Add(BuildTile(kind, name, glyph, color, count,
-                latest != null ? latest.Time.ToString("HH:mm") : "", name));
-        }
-
-        // 插件来源：按来源聚合成磁贴（未读数 + 最近时间 + 自定义图标）
-        // 排序：置顶的来源排在最前，其余按最近消息时间倒序
         var inbox = Services.ServiceHub.Inbox;
         var groups = inbox.Items
             .GroupBy(m => m.Source, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        // 内置三块始终显示且顺序固定（QQ → 微信 → 邮件）：
+        // 开了 notify_to_inbox 时计数/时间取自 Inbox 里镜像过来的消息，否则取自 NotifyService。
+        var notify = Services.ServiceHub.Notify;
+        foreach (var (kind, name, glyph, color) in BuiltInTiles)
+        {
+            var g = groups.FirstOrDefault(x => string.Equals(x.Key, kind, StringComparison.OrdinalIgnoreCase));
+            groups.Remove(g!);
+
+            int count;
+            string time;
+            if (NotifyToInbox)
+            {
+                count = g?.Count(m => !m.Read) ?? 0;
+                var latestAt = g?.Max(m => m.Time);
+                time = latestAt is { } t ? t.ToString("HH:mm") : "";
+            }
+            else
+            {
+                count = notify.Counts.GetValueOrDefault(kind);
+                var latest = notify.History.FirstOrDefault(h => h.Kind == kind);
+                time = latest != null ? latest.Time.ToString("HH:mm") : "";
+            }
+
+            TilesPanel.Children.Add(BuildTile(kind, name, glyph, color, count, time, name));
+        }
+
+        // 其余来源（插件 + 其它）：置顶优先，再按最近消息时间倒序
         groups.Sort((a, b) =>
         {
             var pa = _pinned.Contains(a.Key) ? 0 : 1;
@@ -300,8 +334,10 @@ public partial class MessagesPage : UserControl
 
         if (tag.StartsWith("plugin:", StringComparison.Ordinal))
         {
-            // 点插件磁贴 = 该来源标记已读
-            Services.ServiceHub.Inbox.MarkRead(tag["plugin:".Length..]);
+            var source = tag["plugin:".Length..];
+            // 点磁贴 = 该来源标记已读；内置类型（qq/微信/邮件）还顺带打开对应程序
+            Services.ServiceHub.Inbox.MarkRead(source);
+            if (IsBuiltInSource(source)) Services.ServiceHub.Notify.Open(source);
             return;
         }
 
@@ -464,7 +500,8 @@ public partial class MessagesPage : UserControl
 
     private void ClearAll_Click(object sender, RoutedEventArgs e)
     {
-        try { Services.ServiceHub.Inbox.Clear(); } catch { }
+        // 「全部已读」= 标记为已读（保留历史），并清掉系统通知的未读计数
+        try { Services.ServiceHub.Inbox.MarkRead(); } catch { }
         try { Services.ServiceHub.Notify.ClearAll(); } catch { }
         Refresh();
     }

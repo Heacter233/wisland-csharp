@@ -80,6 +80,10 @@ public partial class SettingsPage : UserControl
             new[] { "顶部", "底部", "左侧", "右侧" },
             cfg.Get("island.edge", "top")));
 
+        AddCard(basic, CardToggle("系统通知进消息页", "island.notify_to_inbox",
+            cfg.Get("island.notify_to_inbox", true),
+            "把 QQ / 微信 / 邮件的系统通知也写入消息页，磁贴与折叠、置顶统一生效"));
+
         AddCard(basic, CardToggle("常驻展开", "island.pinned",
             cfg.Get("island.pinned", false), "岛保持展开，不再自动收起"));
 
@@ -463,6 +467,10 @@ public partial class SettingsPage : UserControl
     {
         switch (key)
         {
+            case "island.notify_to_inbox":
+                cfg.Set(key, value == "true");
+                break;
+
             case "island.glass":
                 cfg.Set(key, value);
                 ServiceHub.RequestGlass?.Invoke();

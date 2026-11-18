@@ -218,7 +218,11 @@ public sealed class NotifyService : IDisposable
 
         if (countsSnapshot != null) CountsChanged?.Invoke(this, countsSnapshot);
 
-        foreach (var item in fresh) Notified?.Invoke(this, item);
+        foreach (var item in fresh)
+        {
+            MirrorToInbox(item);
+            Notified?.Invoke(this, item);
+        }
     }
 
     private bool CopySnapshot()
@@ -310,6 +314,38 @@ public sealed class NotifyService : IDisposable
         return true;
     }
 
+    /// <summary>系统通知来源的显示信息（名字 / 图标字形 / 颜色），用于镜像到 Inbox。</summary>
+    public static (string Name, string Glyph, string Color) KindInfo(string kind) => kind switch
+    {
+        "qq" => ("QQ", "\uE8F2", "#12B7F5"),
+        "wechat" => ("微信", "\uE8BD", "#07C160"),
+        "mail" => ("邮件", "\uE715", "#FF9F0A"),
+        _ => ("通知", "\uE8BD", "#5A9BF0"),
+    };
+
+    /// <summary>把系统通知镜像进 Inbox（config: island.notify_to_inbox，默认开）。</summary>
+    private void MirrorToInbox(NotifyItem item)
+    {
+        try
+        {
+            if (!_config.Get("island.notify_to_inbox", true)) return;
+            var (name, glyph, color) = KindInfo(item.Kind);
+            ServiceHub.Inbox.Push(new PluginMessage
+            {
+                Source = item.Kind,
+                SourceName = string.IsNullOrWhiteSpace(item.Name) ? name : item.Name,
+                Title = string.IsNullOrWhiteSpace(item.Title) ? name : item.Title,
+                Body = string.IsNullOrWhiteSpace(item.Body) ? item.Description : item.Body,
+                Level = "info",
+                IconGlyph = glyph,
+                IconColor = color,
+                Time = item.Time,
+                Kind = item.Kind,
+            });
+        }
+        catch { }
+    }
+
     /// <summary>外部（例如手动推送/测试）记录一条消息。</summary>
     public void Emit(NotifyItem item)
     {
@@ -319,6 +355,7 @@ public sealed class NotifyService : IDisposable
             if (_history.Count > 60) _history.RemoveAt(_history.Count - 1);
             _counts[item.Kind] = _counts.GetValueOrDefault(item.Kind) + 1;
         }
+        MirrorToInbox(item);
         Notified?.Invoke(this, item);
         CountsChanged?.Invoke(this, new Dictionary<string, int>(Counts));
     }
