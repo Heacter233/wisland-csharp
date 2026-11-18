@@ -239,6 +239,7 @@ public partial class MainWindow : Window
         // 固定窗口尺寸：动画中不再改窗口大小（改尺寸会重合成整窗 → 闪烁/卡顿）
         Width = FixedWindowWidth;
         Height = FixedWindowHeight;
+        // 高度稍后按"所有页面的最大展开高度"再算（FitWindowToPages）
     }
 
     /// <summary>当前页面要求的高度（页面自身 Height 优先）。</summary>
@@ -274,6 +275,8 @@ public partial class MainWindow : Window
                 // 否则更高的页面底部会被当前窗口矩形裁掉。
                 BeginGlassAnim();
             }
+            if (!_chrome.SystemGlass) FitWindowToPages();
+
             // 再等一帧复测一次：部分页面（剪贴板/设置）内容高度要等首次 arrange 后才稳定
             Dispatcher.BeginInvoke(new Action(() =>
             {
@@ -316,11 +319,13 @@ public partial class MainWindow : Window
         catch { }
 
         // 展开态拖拽：点在"岛体自定义区域"（导航栏与页面之外的空白/本体）才算拖拽。
-        // 判定方式：向上找祖先，途中若经过 页面宿主 或 导航栏 或任何可交互控件，就不拖。
+        // 但不要一按下就收起（普通单击也会命中空白区），改成"按住 0.5 秒"才判定为拖拽。
         if (IsChromeBlankArea(e.OriginalSource))
         {
             e.Handled = true;
-            CollapseToCursor();
+            _holdPending = true;
+            _dragHold.Stop();
+            _dragHold.Start();
             return;
         }
 
@@ -362,6 +367,22 @@ public partial class MainWindow : Window
             d = System.Windows.Media.VisualTreeHelper.GetParent(d);
         }
         return false;
+    }
+
+    private readonly System.Windows.Threading.DispatcherTimer _dragHold =
+        new() { Interval = TimeSpan.FromMilliseconds(500) };
+
+    private bool _holdPending;
+
+    protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
+    {
+        // 提前松手 = 单击，取消拖拽判定
+        if (_holdPending)
+        {
+            _holdPending = false;
+            _dragHold.Stop();
+        }
+        base.OnMouseLeftButtonUp(e);
     }
 
     /// <summary>把岛收起到当前指针位置，然后立刻进入拖动（松手后按最近边吸附）。</summary>
@@ -610,12 +631,21 @@ public partial class MainWindow : Window
             // 展开高度也提前算一次
             _chrome.ExpandedHeight = () => CurrentPageHeight() + 66;
             _ = CurrentPageHeight();
+            FitWindowToPages();
         }
         catch (Exception ex) { App.LogCrash("prewarm pages", ex); }
     }
 
     private void StartTicker()
     {
+        _dragHold.Tick += (_, _) =>
+        {
+            _dragHold.Stop();
+            if (!_holdPending) return;
+            _holdPending = false;
+            // 仍按着左键且指针在本体内 → 视为拖拽
+            CollapseToCursor();
+        };
         _glassResume.Tick += (_, _) =>
         {
             _glassResume.Stop();
@@ -834,6 +864,35 @@ public partial class MainWindow : Window
     public const double FixedWindowHeight = 540;
 
     /// <summary>按 island.edge / island.pos 摆放窗口，使「本体」贴住对应屏幕边。</summary>
+    /// <summary>
+    /// 抓屏/实色模式窗口尺寸固定（动画期间不改尺寸才流畅），但高度必须能容纳
+    /// 最高的那个页面，否则展开到高页面时本体底部会被窗口矩形裁掉
+    /// （表现为底部圆弧和描边线消失几个像素）。
+    /// </summary>
+    private void FitWindowToPages()
+    {
+        if (_chrome.SystemGlass) return;      // DWM 模式窗口贴合药丸，不需要
+
+        double maxH = 0;
+        foreach (var page in _pages.Values)
+        {
+            page.Measure(new Size(636, 2000));
+            // page.Height 是上一次 arrange 的高度（展开时会被拉满可用空间），
+            // DesiredSize 是内容自然高度，两者取大才不会算小。
+            maxH = Math.Max(maxH, Math.Max(page.DesiredSize.Height, page.Height));
+        }
+        foreach (var h in _pageHeights.Values) maxH = Math.Max(maxH, h);
+
+        // +10 余量：本体高度恰好顶到窗口边缘时，底部圆弧和描边会被窗口裁掉几个像素
+        var need = maxH + 66 + 2 * IslandChrome.WindowPad + 10;
+
+        var target = Math.Max(FixedWindowHeight, Math.Ceiling(need));
+        if (Math.Abs(Height - target) < 1) return;
+
+        Height = target;
+        PositionWindow();
+    }
+
     private void PositionWindow()
     {
         var wa = WorkAreaDip();
@@ -1297,6 +1356,14 @@ public partial class MainWindow : Window
         else
         {
             SystemBlur.Apply(_hwnd, false);
+
+            // 从 DWM 模式切回来时，窗口还停在"贴合药丸"的小尺寸上，
+            // 而抓屏/实色模式需要固定尺寸窗口（700×max）——不恢复的话展开后
+            // 本体底部会被这个小窗口裁掉（表现为底部圆弧和描边消失）。
+            Width = FixedWindowWidth;
+            Height = FixedWindowHeight;
+            FitWindowToPages();
+            PositionWindow();
         }
 
         _chrome.InvalidateVisual();
