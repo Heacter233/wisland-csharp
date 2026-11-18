@@ -269,6 +269,45 @@ public partial class HomePage : UserControl
 
         b.Click += (_, _) => Launch(item);
 
+        // ---- 拖拽排序 ----
+        Point dragStart = default;
+        var pressed = false;
+        b.PreviewMouseLeftButtonDown += (_, e2) =>
+        {
+            dragStart = e2.GetPosition(this);
+            pressed = true;
+        };
+        b.PreviewMouseMove += (_, e2) =>
+        {
+            if (!pressed || e2.LeftButton != MouseButtonState.Pressed) return;
+            var pos = e2.GetPosition(this);
+            if (Math.Abs(pos.X - dragStart.X) < 6 && Math.Abs(pos.Y - dragStart.Y) < 6) return;
+            pressed = false;
+            try
+            {
+                DragDrop.DoDragDrop(b, new DataObject("wisland.launcher", item.Path),
+                    DragDropEffects.Move);
+            }
+            catch { }
+        };
+        b.PreviewMouseLeftButtonUp += (_, _) => pressed = false;
+        b.AllowDrop = true;
+        b.DragOver += (_, e2) =>
+        {
+            if (e2.Data.GetDataPresent("wisland.launcher"))
+            {
+                e2.Effects = DragDropEffects.Move;
+                e2.Handled = true;
+            }
+        };
+        b.Drop += (_, e2) =>
+        {
+            if (e2.Data.GetData("wisland.launcher") is not string srcPath) return;
+            if (string.Equals(srcPath, item.Path, StringComparison.OrdinalIgnoreCase)) return;
+            ReorderLauncher(srcPath, item.Path);
+            e2.Handled = true;
+        };
+
         var menu = new ContextMenu();
         var pin = new MenuItem { Header = item.Pinned ? "取消置顶" : "置顶" };
         pin.Click += (_, _) =>
@@ -276,6 +315,9 @@ public partial class HomePage : UserControl
             item.Pinned = !item.Pinned;
             SaveAndRebuild();
         };
+        var argsItem = new MenuItem { Header = "启动参数…" };
+        argsItem.Click += (_, _) => EditArgs(item);
+
         var iconItem = new MenuItem { Header = "自定义图标…" };
         iconItem.Click += (_, _) => PickCustomIcon(item);
         var remove = new MenuItem { Header = "移除" };
@@ -287,6 +329,7 @@ public partial class HomePage : UserControl
             BuildLauncher();
         };
         menu.Items.Add(pin);
+        menu.Items.Add(argsItem);
         menu.Items.Add(iconItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(remove);
@@ -379,6 +422,116 @@ public partial class HomePage : UserControl
         BuildLauncher();
     }
 
+    /// <summary>编辑启动参数（带输入框的小对话框）。</summary>
+    private void EditArgs(Services.LauncherItem item)
+    {
+        var list = Services.ServiceHub.Config.GetLauncher();
+        var target = list.FirstOrDefault(x =>
+            string.Equals(x.Path, item.Path, StringComparison.OrdinalIgnoreCase));
+        if (target == null) return;
+
+        var win = new Window
+        {
+            Title = "启动参数",
+            Width = 420,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStyle = WindowStyle.ToolWindow,
+            Background = (Brush)FindResource("AppCard"),
+        };
+
+        var box = new TextBox
+        {
+            Text = target.Args,
+            Margin = new Thickness(0, 0, 0, 12),
+            Padding = new Thickness(6, 4, 6, 4),
+            FontFamily = (FontFamily)FindResource("UiFont"),
+        };
+        var hint = new TextBlock
+        {
+            Text = "例如：--flag 或 \"C:\\某个文件.txt\"（留空表示不带参数）",
+            FontSize = 11,
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 10),
+        };
+        var ok = new Button { Content = "确定", Width = 72, Height = 28, HorizontalAlignment = HorizontalAlignment.Right };
+        var panel = new StackPanel { Margin = new Thickness(16) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = target.Name,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 8),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        panel.Children.Add(hint);
+        panel.Children.Add(box);
+        panel.Children.Add(ok);
+        win.Content = panel;
+
+        ok.Click += (_, _) =>
+        {
+            var list2 = Services.ServiceHub.Config.GetLauncher();
+            var t2 = list2.FirstOrDefault(x =>
+                string.Equals(x.Path, target.Path, StringComparison.OrdinalIgnoreCase));
+            if (t2 != null) t2.Args = box.Text ?? "";
+            Services.ServiceHub.Config.SaveLauncher(list2);
+            win.Close();
+            BuildLauncher();
+        };
+
+        win.ShowDialog();
+    }
+
+    /// <summary>把拖进来的文件/文件夹批量加入启动栏（已存在则跳过）。</summary>
+    public void AddDroppedPaths(System.Collections.Generic.IEnumerable<string> paths)
+    {
+        var list = Services.ServiceHub.Config.GetLauncher();
+        var added = 0;
+        foreach (var raw in paths)
+        {
+            var p = (raw ?? "").Trim();
+            if (p.Length == 0) continue;
+            if (list.Any(x => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase))) continue;
+
+            var isFolder = Directory.Exists(p);
+            list.Add(new Services.LauncherItem
+            {
+                Name = Services.ShellIcons.DisplayName(p, isFolder),
+                Path = p,
+                IsFolder = isFolder,
+            });
+            added++;
+        }
+        if (added == 0) return;
+        Services.ServiceHub.Config.SaveLauncher(list);
+        BuildLauncher();
+    }
+
+    /// <summary>把 srcPath 移动到 targetPath 的位置（拖拽排序）。</summary>
+    private void ReorderLauncher(string srcPath, string targetPath)
+    {
+        // 以"当前显示顺序"为基准重排，保证拖动结果与看到的一致
+        var display = Services.ServiceHub.Config.GetLauncher()
+            .Select((it, idx) => (it, idx))
+            .OrderByDescending(x => x.it.Pinned)
+            .ThenBy(x => x.idx)
+            .Select(x => x.it)
+            .ToList();
+
+        var from = display.FindIndex(x => string.Equals(x.Path, srcPath, StringComparison.OrdinalIgnoreCase));
+        var to = display.FindIndex(x => string.Equals(x.Path, targetPath, StringComparison.OrdinalIgnoreCase));
+        if (from < 0 || to < 0 || from == to) return;
+
+        var moved = display[from];
+        display.RemoveAt(from);
+        display.Insert(to, moved);
+
+        Services.ServiceHub.Config.SaveLauncher(display);
+        BuildLauncher();
+    }
+
     private void SaveAndRebuild()
     {
         Services.ServiceHub.Config.SaveLauncher(Services.ServiceHub.Config.GetLauncher());
@@ -401,8 +554,9 @@ public partial class HomePage : UserControl
             }
             if (File.Exists(path))
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path)
-                { UseShellExecute = true });
+                var psi = new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true };
+                if (!string.IsNullOrWhiteSpace(item.Args)) psi.Arguments = item.Args;
+                System.Diagnostics.Process.Start(psi);
             }
         }
         catch { }

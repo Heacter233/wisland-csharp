@@ -19,6 +19,9 @@ public sealed class LauncherItem
 
     /// <summary>是否为文件夹（影响图标与提示文字）。</summary>
     public bool IsFolder { get; set; }
+
+    /// <summary>启动参数（例如 "C:\a.txt" 或 --flag）。</summary>
+    public string Args { get; set; } = "";
 }
 
 /// <summary>

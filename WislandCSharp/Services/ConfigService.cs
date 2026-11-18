@@ -225,6 +225,7 @@ public class ConfigService : IConfigService
                 if (it.Pinned) d["pinned"] = true;
                 if (!string.IsNullOrEmpty(it.Icon)) d["icon"] = it.Icon;
                 if (it.IsFolder) d["folder"] = true;
+                if (!string.IsNullOrEmpty(it.Args)) d["args"] = it.Args;
                 arr.Add(d);
             }
             _values["launcher"] = arr;
@@ -250,6 +251,7 @@ public class ConfigService : IConfigService
             Pinned = d.TryGetValue("pinned", out var pin) && pin is bool pb && pb,
             Icon = d.TryGetValue("icon", out var ic) ? ic as string ?? "" : "",
             IsFolder = d.TryGetValue("folder", out var fo) && fo is bool fb && fb,
+            Args = d.TryGetValue("args", out var ar) ? ar as string ?? "" : "",
                 });
             }
         }

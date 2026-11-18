@@ -61,6 +61,31 @@ public static class ShellIcons
         return img;
     }
 
+    private const uint ShgfiDisplayName = 0x00000200;
+
+    /// <summary>shell 的本地化显示名（例如 Desktop → 桌面）；取不到返回空。</summary>
+    private static string ShellDisplayName(string path)
+    {
+        try
+        {
+            var info = new SHFILEINFO();
+            uint flags = ShgfiDisplayName;
+            uint attr = 0;
+            if (Directory.Exists(path) || File.Exists(path))
+            {
+                // 真实存在：让 shell 直接解析
+            }
+            else
+            {
+                flags |= ShgfiUseFileAttributes;
+                attr = FileAttributeDirectory;
+            }
+            SHGetFileInfo(path, attr, ref info, (uint)Marshal.SizeOf<SHFILEINFO>(), flags);
+            return info.szDisplayName ?? "";
+        }
+        catch { return ""; }
+    }
+
     private static ImageSource? LoadImageFile(string file)
     {
         try
@@ -113,13 +138,16 @@ public static class ShellIcons
         catch { return null; }
     }
 
-    /// <summary>文件夹的显示名（不带路径），用于 ToolTip / 名称回退。</summary>
+    /// <summary>文件夹的显示名（不带路径，优先 shell 本地化名称），用于 ToolTip / 名称回退。</summary>
     public static string DisplayName(string path, bool isFolder)
     {
         try
         {
             if (isFolder || Directory.Exists(path))
             {
+                var shellName = ShellDisplayName(path);
+                if (!string.IsNullOrWhiteSpace(shellName)) return shellName;
+
                 var trimmed = path.TrimEnd('\\', '/');
                 var name = Path.GetFileName(trimmed);
                 return string.IsNullOrWhiteSpace(name) ? trimmed : name;

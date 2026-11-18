@@ -141,6 +141,7 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             StartTicker();
+        Try("filedrop", SetupFileDrop);
 
         // 收起态新消息提示：Inbox 变化 → 绿点 + 滚动/弹出展示
         Try("notify-watch", () =>
@@ -582,6 +583,24 @@ public partial class MainWindow : Window
         // 系统模糊玻璃（默认开启）。--legacy-glass 可回退到抓屏方案做对比。
         Try("glass-mode", ApplyGlassMode);
 
+        // 调试：--launcher-test=<path> 走一遍"拖入启动栏"的添加与落盘逻辑
+        Try("launcher-test", () =>
+        {
+            foreach (var arg in Environment.GetCommandLineArgs())
+            {
+                if (!arg.StartsWith("--launcher-test=", StringComparison.OrdinalIgnoreCase)) continue;
+                var target = arg["--launcher-test=".Length..];
+                ShowPage("home");
+                if (_pages.TryGetValue("home", out var pg) && pg is HomePage hp)
+                {
+                    hp.AddDroppedPaths(new[] { target });
+                    System.IO.File.AppendAllText(
+                        System.IO.Path.Combine(Services.AppPaths.DataDir, "launcher-test.log"),
+                        $"{DateTime.Now:HH:mm:ss} added '{target}'{Environment.NewLine}");
+                }
+            }
+        });
+
         // 调试：--open-test=qq|wechat|mail 验证"磁贴点击打开程序"的兜底链路
         Try("open-test", () =>
         {
@@ -876,6 +895,33 @@ public partial class MainWindow : Window
             FitWindowToPages();
         }
         catch (Exception ex) { App.LogCrash("prewarm pages", ex); }
+    }
+
+    // ---------------- 拖放：把文件/程序拖到岛上加入启动栏 ----------------
+
+    private void SetupFileDrop()
+    {
+        AllowDrop = true;
+
+        PreviewDragOver += (_, e) =>
+        {
+            if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+            e.Effects = DragDropEffects.Copy;
+            e.Handled = true;
+            // 收起态被拖入时自动展开（否则没有可放的位置）
+            if (!_chrome.IsExpanded) Expand();
+        };
+
+        Drop += (_, e) =>
+        {
+            if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+            if (e.Data.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0) return;
+            e.Handled = true;
+
+            ShowPage("home");
+            if (_pages.TryGetValue("home", out var page) && page is HomePage home)
+                home.AddDroppedPaths(files);
+        };
     }
 
     private void StartTicker()
