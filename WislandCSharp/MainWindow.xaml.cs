@@ -431,10 +431,10 @@ public partial class MainWindow : Window
             //                   代价是作用域为窗口矩形，药丸四角外侧也会带上模糊，
             //                   由 IslandChrome 的角部雾化遮盖（CornerFog）。
             //   capture      = 抓屏模糊：形状完美，但抓屏会拍到自身，兜底方案（有鬼影风险）。
-            // 默认抓屏：本机实测 accent 亚克力只给出"透明+色调"，看不到模糊
-            // （高对比细条纹背景下条纹清晰可辨），而抓屏方案能出真实磨砂。
-            // 想要 DWM 实时模糊可设 island.glass = "system"。
-            var cfg = ServiceHub.Config.Get("island.glass", "capture");
+            // 默认 DWM 亚克力：玻璃是**实时**的（视频/游戏/滚动都会跟着变）。
+            // 抓屏方案虽然形状完美，但玻璃内容会定格在最后一次抓屏（可达几十秒前），
+            // 观感上更像"贴了一张旧截图"，因此只作兜底：island.glass = "capture"。
+            var cfg = ServiceHub.Config.Get("island.glass", "system");
             var wantCapture =
                 Array.Exists(Environment.GetCommandLineArgs(),
                     a => string.Equals(a, "--capture-glass", StringComparison.OrdinalIgnoreCase)) ||
