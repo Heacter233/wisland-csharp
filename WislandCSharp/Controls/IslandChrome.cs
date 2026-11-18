@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -32,6 +34,22 @@ public sealed class IslandChrome : Panel
     private double _pokeX, _pokeY;
     private bool _poking;
     private Rect _bodyRect;
+
+    // ---- 收起态新消息提示（绿点 / 横向滚动 / 下方逐条弹出 / 插件自定义动画）----
+    private const int MaxNotifyLines = 3;
+    private readonly List<string> _notifyLines = new();
+    private string _notifyTicker = "";
+    private double _tickerX;
+    private double _tickerT0;
+
+    /// <summary>未读数（&gt;0 时收起态右侧显示绿点）。</summary>
+    public int NotifyUnread { get; private set; }
+
+    /// <summary>true = 滚动展示（胶囊内横向滚动）；false = 下方逐条弹出。</summary>
+    public bool NotifyTickerMode { get; set; }
+
+    /// <summary>插件自定义通知动画（在胶囊内绘制，参数：绘制上下文、可用区域、经过秒数）。</summary>
+    public Action<DrawingContext, Rect, double>? NotifyCustomDraw { get; private set; }
     private Point _pressPoint = new(-1, -1);
     private DateTime _t0 = DateTime.UtcNow;
 
@@ -103,8 +121,9 @@ public sealed class IslandChrome : Panel
         _compactA.To(1, 500, 1.0);
         _contentA.To(0, 400, 1.0);
         var (cw, ch) = Compact.SizeHint();
-        _w.To(cw, 460, 0.64);
-        _h.To(ch, 460, 0.64);
+        var (ew, eh) = NotifyExtra();
+        _w.To(cw + ew, 460, 0.64);
+        _h.To(ch + eh, 460, 0.64);
         InvalidateMeasure();
         InvalidateVisual();
     }
@@ -113,12 +132,88 @@ public sealed class IslandChrome : Panel
     {
         if (_expanded) return;
         var (cw, ch) = Compact.SizeHint();
+        var (ew, eh) = NotifyExtra();
+        cw += ew;
+        ch += eh;
         if (Math.Abs(_w.Target - cw) > 0.5 || Math.Abs(_h.Target - ch) > 0.5)
         {
             _w.To(cw, 460, 0.64);
             _h.To(ch, 460, 0.64);
             InvalidateMeasure();
         }
+    }
+
+    // ---------------- 收起态新消息提示 ----------------
+
+    /// <summary>更新未读数（绿点）。</summary>
+    public void SetUnread(int count)
+    {
+        var v = Math.Max(0, count);
+        if (v == NotifyUnread) return;
+        NotifyUnread = v;
+        RetargetCompact();
+        InvalidateVisual();
+    }
+
+    /// <summary>滚动模式：设置滚动文字（传空字符串取消）。</summary>
+    public void SetTicker(string text, Action<DrawingContext, Rect, double>? custom = null)
+    {
+        _notifyTicker = text ?? "";
+        _tickerX = 0;
+        _tickerT0 = (DateTime.UtcNow - _t0).TotalSeconds;
+        NotifyCustomDraw = custom;
+        RetargetCompact();
+        InvalidateVisual();
+    }
+
+    /// <summary>弹出模式：追加一条（最多 3 条，超出顶掉最旧的一条）。</summary>
+    public void PushNotifyLine(string text, Action<DrawingContext, Rect, double>? custom = null)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        while (_notifyLines.Count >= MaxNotifyLines) _notifyLines.RemoveAt(0);
+        _notifyLines.Add(text);
+        if (custom != null) NotifyCustomDraw = custom;
+        RetargetCompact();
+        InvalidateVisual();
+    }
+
+    /// <summary>弹出模式：收起最旧的一条（逐条收起）。</summary>
+    public void PopNotifyLine()
+    {
+        if (_notifyLines.Count == 0) return;
+        _notifyLines.RemoveAt(0);
+        if (_notifyLines.Count == 0) NotifyCustomDraw = null;
+        RetargetCompact();
+        InvalidateVisual();
+    }
+
+    /// <summary>清空全部提示（绿点保留）。</summary>
+    public void ClearNotify()
+    {
+        _notifyLines.Clear();
+        _notifyTicker = "";
+        NotifyCustomDraw = null;
+        RetargetCompact();
+        InvalidateVisual();
+    }
+
+    /// <summary>收起态提示占用的额外宽/高（滚动模式加宽，弹出模式加高）。</summary>
+    private (double W, double H) NotifyExtra()
+    {
+        double w = 0, h = 0;
+        if (NotifyUnread > 0) w += 18;                     // 给绿点留位置
+        if (NotifyTickerMode && _notifyTicker.Length > 0)
+            w += Math.Min(220, ApproxTextWidth(_notifyTicker) + 28);
+        if (!NotifyTickerMode && _notifyLines.Count > 0)
+            h += _notifyLines.Count * 18 + 8;
+        return (w, h);
+    }
+
+    private static double ApproxTextWidth(string s)
+    {
+        double w = 0;
+        foreach (var ch in s) w += ch > 0x2E80 ? 12.5 : 7.0;
+        return w;
     }
 
     /// <summary>展开状态下改变目标高度（切页时用）。</summary>
@@ -181,8 +276,12 @@ public sealed class IslandChrome : Panel
 
         // 重绘节流：动画中逐帧重绘；静止时只在收起态以约 20fps 重绘（边缘流光）
         // 恒定 60fps 全窗重绘会在深色/大窗下表现为持续占用与卡顿感。
+        // 滚动提示：文字持续左移，需要连续重绘
+        var tickerRunning = !_expanded && NotifyTickerMode && _notifyTicker.Length > 0;
+        if (tickerRunning) _tickerX += dt * 42.0;
+
         _idleTick++;
-        var needRepaint = moving || (!_expanded && _idleTick % 3 == 0);
+        var needRepaint = moving || tickerRunning || (!_expanded && _idleTick % 3 == 0);
         if (needRepaint) InvalidateVisual();
         return moving;
     }
@@ -443,6 +542,80 @@ public sealed class IslandChrome : Panel
 
         // 5) 四角雾化：把矩形模糊在药丸圆角外露出的四块盖住
         DrawCornerFog(dc, path);
+
+        // 6) 收起态新消息提示（绿点 / 滚动文字 / 下方逐条弹出 / 插件自定义动画）
+        if (!_expanded) DrawNotify(dc, path);
+    }
+
+    /// <summary>收起态的新消息提示绘制。</summary>
+    private void DrawNotify(DrawingContext dc, Geometry pillPath)
+    {
+        var r = _bodyRect;
+        dc.PushClip(pillPath);
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+
+            // 绿点：右上角内侧
+            if (NotifyUnread > 0)
+            {
+                var dotR = 3.6;
+                var cx = r.Right - 11;
+                var cy = r.Top + 9;
+                dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E)), null,
+                    new Point(cx, cy), dotR, dotR);
+            }
+
+            var fg = Themes.IsDark
+                ? Color.FromArgb(240, 255, 255, 255)
+                : Color.FromArgb(240, 20, 20, 24);
+            var typeface = new Typeface(new FontFamily(Wisland.Theme.Fonts.Ui), FontStyles.Normal,
+                FontWeights.Medium, FontStretches.Normal);
+
+            if (NotifyTickerMode && _notifyTicker.Length > 0)
+            {
+                // 横向滚动：文字从右侧进入，向左滚出，循环
+                var textW = ApproxTextWidth(_notifyTicker);
+                var baseW = Compact.SizeHint().W;         // 内置内容占的宽度
+                var areaX = r.Left + baseW + 4;           // 只在新增的右侧区域滚动
+                var areaW = Math.Max(24, r.Right - 20 - areaX);
+                var x = areaX - (_tickerX % (textW + areaW + 40)) + areaW + 12;
+                var ft = new FormattedText(_notifyTicker, System.Globalization.CultureInfo.CurrentCulture,
+                    FlowDirection.LeftToRight, typeface, 11.5, new SolidColorBrush(fg), dpi);
+                dc.PushClip(new RectangleGeometry(new Rect(areaX, r.Top + 4, areaW, r.Height - 8)));
+                dc.DrawText(ft, new Point(x, r.Top + r.Height / 2 - ft.Height / 2));
+                dc.Pop();
+            }
+
+            if (!NotifyTickerMode && _notifyLines.Count > 0)
+            {
+                // 下方逐条：主内容占上方，提示行从第 2 行开始往下排
+                var top = r.Bottom - _notifyLines.Count * 18 - 6;
+                for (var i = 0; i < _notifyLines.Count; i++)
+                {
+                    var ft = new FormattedText(_notifyLines[i], System.Globalization.CultureInfo.CurrentCulture,
+                        FlowDirection.LeftToRight, typeface, 11.0, new SolidColorBrush(fg), dpi)
+                    {
+                        MaxTextWidth = Math.Max(20, r.Width - 24),
+                        MaxLineCount = 1,
+                        Trimming = TextTrimming.CharacterEllipsis,
+                    };
+                    dc.DrawText(ft, new Point(r.Left + 12, top + i * 18 + (18 - ft.Height) / 2));
+                }
+            }
+
+            // 插件自定义动画：绘制在胶囊内右侧区域
+            if (NotifyCustomDraw != null)
+            {
+                var area = new Rect(r.Right - 120, r.Top + 4, 108, r.Height - 8);
+                if (area.Width > 20 && area.Height > 8)
+                {
+                    var t = (DateTime.UtcNow - _t0).TotalSeconds;
+                    try { NotifyCustomDraw(dc, area, t); } catch { }
+                }
+            }
+        }
+        finally { dc.Pop(); }
     }
 
     /// <summary>

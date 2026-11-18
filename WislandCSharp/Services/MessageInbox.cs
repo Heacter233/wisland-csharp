@@ -38,6 +38,15 @@ public sealed class PluginMessage
     /// </summary>
     public string? Kind { get; init; }
 
+    /// <summary>
+    /// 插件自定义通知动画（可选）：在收起态胶囊内绘制。
+    /// 参数：绘制上下文、可用区域、经过秒数。设置项 island.notify_plugin_anim = false 时会被忽略。
+    /// </summary>
+    public Action<System.Windows.Media.DrawingContext, System.Windows.Rect, double>? NotifyDraw { get; init; }
+
+    /// <summary>插件自定义通知用的图片（可选，绝对路径；与 NotifyDraw 二选一）。</summary>
+    public string? NotifyImage { get; init; }
+
     /// <summary>点击条目要打开的链接（可选）。</summary>
     public string? Uri { get; init; }
 

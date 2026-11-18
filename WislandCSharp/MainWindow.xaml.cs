@@ -142,6 +142,17 @@ public partial class MainWindow : Window
         {
             StartTicker();
 
+        // 收起态新消息提示：Inbox 变化 → 绿点 + 滚动/弹出展示
+        Try("notify-watch", () =>
+        {
+            ServiceHub.Inbox.Changed += OnInboxNotifyChanged;
+            _notifyTimer.Tick += (_, _) => AdvanceNotify();
+            _chrome.NotifyTickerMode = NotifyTickerStyle;
+            _chrome.SetUnread(ServiceHub.Inbox.UnreadCount());
+            // 启动时可能已有未读（例如 --inbox-demo 提前推的），补一次
+            OnInboxNotifyChanged(null, EventArgs.Empty);
+        });
+
         // 预热：首次展开时页面还没量过，会在展开那一帧触发完整布局（实测 ~50ms 尖峰）。
         // 这里在启动后的空闲时机把所有页面量一遍，展开就只剩动画本身。
         Dispatcher.BeginInvoke(new Action(PrewarmPages),
@@ -701,6 +712,73 @@ public partial class MainWindow : Window
         return body.Contains(new Point(pt.X / sx, pt.Y / sy));
     }
 
+    // ---------------- 收起态新消息提示 ----------------
+
+    /// <summary>提示展示时长（毫秒，可配置）。</summary>
+    private int NotifyDurationMs =>
+        Math.Clamp(ServiceHub.Config.Get("island.notify_duration_ms", 4000), 1200, 15000);
+
+    private bool NotifyTickerStyle =>
+        string.Equals(ServiceHub.Config.Get("island.notify_style", "popup"), "ticker",
+            StringComparison.OrdinalIgnoreCase);
+
+    private void OnInboxNotifyChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                _chrome.SetUnread(ServiceHub.Inbox.UnreadCount());
+
+                var allowCustom = ServiceHub.Config.Get("island.notify_plugin_anim", true);
+                // 只提示"刚到的"消息，避免启动/清理时把历史消息全弹一遍
+                foreach (var msg in ServiceHub.Inbox.Items
+                             .Where(x => !x.Read && (DateTime.Now - x.Time).TotalSeconds < 6)
+                             .Reverse())
+                {
+                    if (!_notifySeen.Add(msg)) continue;
+                    var body = string.IsNullOrWhiteSpace(msg.Body) ? msg.Title
+                             : string.IsNullOrWhiteSpace(msg.Title) ? msg.Body
+                             : $"{msg.Title} · {msg.Body}";
+                    var draw = allowCustom ? msg.NotifyDraw : null;
+                    _notifyQueue.Enqueue(($"{msg.DisplaySource}  {body}", draw));
+                }
+
+                if (!_notifyShowing) AdvanceNotify();
+            }
+            catch (Exception ex) { App.LogCrash("notify-ui", ex); }
+        }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>展示下一条；队列空则收起提示。</summary>
+    private void AdvanceNotify()
+    {
+        _notifyTimer.Stop();
+
+        // 先收掉上一条
+        if (_notifyShowing)
+        {
+            if (NotifyTickerStyle) _chrome.SetTicker("");
+            else if (NotifyTickerStyle == false) _chrome.PopNotifyLine();
+        }
+
+        if (_notifyQueue.Count == 0)
+        {
+            _notifyShowing = false;
+            if (!NotifyTickerStyle) _chrome.ClearNotify();
+            return;
+        }
+
+        var (text, draw) = _notifyQueue.Dequeue();
+        _chrome.NotifyTickerMode = NotifyTickerStyle;
+        _notifyShowing = true;
+        if (NotifyTickerStyle) _chrome.SetTicker(text, draw);
+        else _chrome.PushNotifyLine(text, draw);
+
+        _notifyTimer.Interval = TimeSpan.FromMilliseconds(NotifyDurationMs);
+        _notifyTimer.Start();
+    }
+
     /// <summary>把所有页面按展开尺寸量一遍（只测量不显示），消除首次展开的布局尖峰。</summary>
     private void PrewarmPages()
     {
@@ -812,6 +890,12 @@ public partial class MainWindow : Window
         _hoverTimer.Stop();
         _collapseTimer.Stop();
         _chrome.ExpandedHeight = () => CurrentPageHeight() + 66;
+
+        // 展开后提示区没有意义，先清掉
+        _notifyQueue.Clear();
+        _notifyTimer.Stop();
+        _notifyShowing = false;
+        _chrome.ClearNotify();
 
         _chrome.Expand();
 
@@ -1386,6 +1470,13 @@ public partial class MainWindow : Window
     private void SyncGlassWindowGeometry() => SyncGlassWindow(_chrome.BodySize);
 
     private bool _glassAnimating;
+
+    // ---- 收起态新消息提示 ----
+    private readonly HashSet<Services.PluginMessage> _notifySeen = new();
+    private readonly Queue<(string Text, Action<System.Windows.Media.DrawingContext, Rect, double>? Draw)> _notifyQueue = new();
+    private readonly System.Windows.Threading.DispatcherTimer _notifyTimer =
+        new() { Interval = TimeSpan.FromMilliseconds(4000) };
+    private bool _notifyShowing;
 
     /// <summary>本体尺寸是否已经到目标（用于尽早恢复 DWM 模糊）。</summary>
     private bool SizeSettled()

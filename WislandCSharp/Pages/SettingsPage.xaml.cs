@@ -84,6 +84,18 @@ public partial class SettingsPage : UserControl
             cfg.Get("island.notify_to_inbox", true),
             "把 QQ / 微信 / 邮件的系统通知也写入消息页，磁贴与折叠、置顶统一生效"));
 
+        AddCard(basic, CardChoice("新消息提示方式", "island.notify_style",
+            new[] { "popup", "ticker" },
+            new[] { "弹出（加高逐条）", "滚动（加宽横向）" },
+            cfg.Get("island.notify_style", "popup")));
+
+        AddCard(basic, CardSlider("提示停留时长", "island.notify_duration_ms", 1200, 8000, 500,
+            cfg.Get("island.notify_duration_ms", 4000), v => $"{v / 1000.0:0.0} 秒"));
+
+        AddCard(basic, CardToggle("允许插件自定义通知动画", "island.notify_plugin_anim",
+            cfg.Get("island.notify_plugin_anim", true),
+            "关闭后忽略插件提供的图片/绘制动画，只用默认文字提示"));
+
         AddCard(basic, CardToggle("常驻展开", "island.pinned",
             cfg.Get("island.pinned", false), "岛保持展开，不再自动收起"));
 
@@ -467,6 +479,15 @@ public partial class SettingsPage : UserControl
     {
         switch (key)
         {
+            case "island.notify_style":
+            case "island.notify_plugin_anim":
+                cfg.Set(key, value);
+                break;
+
+            case "island.notify_duration_ms":
+                cfg.Set<int>(key, int.TryParse(value, out var dur) ? dur : 4000);
+                break;
+
             case "island.notify_to_inbox":
                 cfg.Set(key, value == "true");
                 break;
