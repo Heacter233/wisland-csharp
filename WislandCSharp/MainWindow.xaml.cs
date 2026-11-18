@@ -431,7 +431,10 @@ public partial class MainWindow : Window
             //                   代价是作用域为窗口矩形，药丸四角外侧也会带上模糊，
             //                   由 IslandChrome 的角部雾化遮盖（CornerFog）。
             //   capture      = 抓屏模糊：形状完美，但抓屏会拍到自身，兜底方案（有鬼影风险）。
-            var cfg = ServiceHub.Config.Get("island.glass", "system");
+            // 默认抓屏：本机实测 accent 亚克力只给出"透明+色调"，看不到模糊
+            // （高对比细条纹背景下条纹清晰可辨），而抓屏方案能出真实磨砂。
+            // 想要 DWM 实时模糊可设 island.glass = "system"。
+            var cfg = ServiceHub.Config.Get("island.glass", "capture");
             var wantCapture =
                 Array.Exists(Environment.GetCommandLineArgs(),
                     a => string.Equals(a, "--capture-glass", StringComparison.OrdinalIgnoreCase)) ||
@@ -518,8 +521,10 @@ public partial class MainWindow : Window
         var moving = _chrome.Step(dt);
         var navMoving = _nav.Step(dt);
 
-        // 系统模糊模式下窗口必须贴合胶囊：accent 模糊是窗口矩形级的
-        if (_chrome.SystemGlass) SyncGlassWindowGeometry();
+        // 系统模糊模式下窗口必须贴合胶囊：accent 模糊是窗口矩形级的。
+        // 但逐帧 SetWindowPos 会让 DWM 每帧重新合成亚克力 → 展开/收起卡成幻灯片。
+        // 因此：动画期间关掉 accent、把窗口一次性设成"目标尺寸包络"，动画结束再贴回药丸。
+        if (_chrome.SystemGlass) UpdateGlassDuringAnimation(moving || navMoving);
 
         // 光标位置 → 收起态形变与形象视线
         var mouse = Mouse.GetPosition(_chrome);
@@ -1098,11 +1103,49 @@ public partial class MainWindow : Window
     /// 只能靠"窗口本身跟着胶囊变"让模糊跟随形状。
     /// 窗口保持分层（AllowsTransparency），因此抗锯齿圆角与外阴影都不受影响。
     /// </summary>
-    private void SyncGlassWindowGeometry()
+    private void SyncGlassWindowGeometry() => SyncGlassWindow(_chrome.BodySize);
+
+    private bool _glassAnimating;
+
+    /// <summary>
+    /// 动画期间的玻璃窗口处理。
+    /// 动画中：禁用 accent（避免每帧重新合成），窗口尺寸取"当前/目标尺寸的包络"，只设一次；
+    /// 动画结束：贴回药丸尺寸并重新开启 accent。
+    /// </summary>
+    private void UpdateGlassDuringAnimation(bool animating)
+    {
+        if (animating)
+        {
+            if (_glassAnimating) return;
+            _glassAnimating = true;
+            _chrome.CenterBody = true;
+            SystemBlur.Apply(_hwnd, false);
+            var (cw, _) = _chrome.BodySize;
+            var (_, chh) = _chrome.BodySize;
+            var (tw, th) = _chrome.BodyTarget;
+            SyncGlassWindow((Math.Max(cw, tw) + 2, Math.Max(chh, th) + 2));
+            return;
+        }
+
+        if (!_glassAnimating)
+        {
+            SyncGlassWindowGeometry();
+            return;
+        }
+
+        _glassAnimating = false;
+        _chrome.CenterBody = false;
+        SyncGlassWindowGeometry();
+        SystemBlur.Apply(_hwnd, true, acrylic: true);
+    }
+
+    /// <summary>把窗口贴到给定本体尺寸上（系统模糊模式用，窗口矩形=模糊矩形）。</summary>
+    private void SyncGlassWindow((double W, double H) body)
     {
         if (_hwnd == IntPtr.Zero) return;
 
-        var (bw, bh) = _chrome.BodySize;
+        var bw = body.W;
+        var bh = body.H;
         var m = IslandChrome.GlassRegionMargin;
 
         // 整数量化：亚像素级的宽/位变化会让窗口左右来回抖 1px（60fps 下就是"疯狂跳动"）

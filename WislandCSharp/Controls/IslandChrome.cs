@@ -49,6 +49,9 @@ public sealed class IslandChrome : Panel
     /// <summary>当前本体尺寸（动画中的实时值）。</summary>
     public (double W, double H) BodySize => (Math.Max(40, _w.X), Math.Max(24, _h.X));
 
+    /// <summary>弹簧的目标尺寸（动画结束时本体大小），用于算动画期间的窗口包络。</summary>
+    public (double W, double H) BodyTarget => (Math.Max(40, _w.Target), Math.Max(24, _h.Target));
+
     public event EventHandler? ExpandRequested;
     public event EventHandler? CollapseRequested;
     public event EventHandler? DragRequested;
@@ -239,7 +242,20 @@ public sealed class IslandChrome : Panel
 
         if (FillWindow)
         {
-            _bodyRect = new Rect(FillMargin, FillMargin, bw, bh);
+            // 窗口通常刚好等于本体（FillMargin=0）。动画期间窗口会临时放大成"包络"，
+            // 此时按贴边方向把本体贴到窗口对应的一侧，保证药丸屏幕位置不跳。
+            double fx = FillMargin, fy = FillMargin;
+            if (CenterBody)
+            {
+                switch (AnchorEdge)
+                {
+                    case "bottom": fx = (finalSize.Width - bw) / 2; fy = finalSize.Height - FillMargin - bh; break;
+                    case "left":   fx = FillMargin; fy = (finalSize.Height - bh) / 2; break;
+                    case "right":  fx = finalSize.Width - FillMargin - bw; fy = (finalSize.Height - bh) / 2; break;
+                    default:       fx = (finalSize.Width - bw) / 2; fy = FillMargin; break;
+                }
+            }
+            _bodyRect = new Rect(fx, fy, bw, bh);
         }
         else
         {
@@ -282,6 +298,12 @@ public sealed class IslandChrome : Panel
 
     /// <summary>贴边方向：top / bottom / left / right（决定本体贴在窗口的哪一侧）。</summary>
     public string AnchorEdge { get; set; } = "top";
+
+    /// <summary>
+    /// 窗口大于本体时，按贴边方向把本体摆到窗口对应一侧（动画期间窗口放大成包络时用）。
+    /// 平时窗口==本体，这个开关无影响。
+    /// </summary>
+    public bool CenterBody { get; set; }
 
     // ---------------- 形状 ----------------
     private Geometry BodyGeometry()
