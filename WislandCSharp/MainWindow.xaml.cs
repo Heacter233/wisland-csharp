@@ -274,6 +274,25 @@ public partial class MainWindow : Window
                 // 否则更高的页面底部会被当前窗口矩形裁掉。
                 BeginGlassAnim();
             }
+            // 再等一帧复测一次：部分页面（剪贴板/设置）内容高度要等首次 arrange 后才稳定
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    _pageHost.UpdateLayout();
+                    var pg = _pages[key];
+                    pg.Measure(new Size(636, 2000));
+                    var h2 = pg.DesiredSize.Height;
+                    if (h2 > 10 && Math.Abs(h2 - h) > 2)
+                    {
+                        _pageHeights[key] = h2;
+                        _chrome.RetargetExpandedHeight(h2 + 66);
+                        _chrome.InvalidateMeasure();
+                        if (_chrome.SystemGlass) BeginGlassAnim();
+                    }
+                }
+                catch { }
+            }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
         ServiceHub.Config.Set("island.last_tab", key, save: false);
     }
@@ -296,9 +315,9 @@ public partial class MainWindow : Window
         }
         catch { }
 
-        // 展开态拖拽：只有点在岛体本身（空白处，不是页面内容/卡片/控件）才进入拖拽，
-        // 避免抢掉剪贴板卡片点击、设置项点击等正常交互。
-        if (ReferenceEquals(e.OriginalSource, _chrome))
+        // 展开态拖拽：点在"岛体自定义区域"（导航栏与页面之外的空白/本体）才算拖拽。
+        // 判定方式：向上找祖先，途中若经过 页面宿主 或 导航栏 或任何可交互控件，就不拖。
+        if (IsChromeBlankArea(e.OriginalSource))
         {
             e.Handled = true;
             CollapseToCursor();
@@ -306,6 +325,24 @@ public partial class MainWindow : Window
         }
 
         base.OnMouseLeftButtonDown(e);
+    }
+
+    /// <summary>
+    /// 命中点是否属于"岛体空白区"（可以拖动）：从原始命中元素向上找，
+    /// 路径中若出现页面宿主(_pageHost)/导航栏(_nav)/可交互控件，则不是。
+    /// </summary>
+    private bool IsChromeBlankArea(object? src)
+    {
+        if (IsInteractiveSource(src)) return false;
+        var d = src as DependencyObject;
+        while (d != null)
+        {
+            if (ReferenceEquals(d, _pageHost) || ReferenceEquals(d, _nav)) return false;
+            if (ReferenceEquals(d, _chrome)) return true;
+            d = System.Windows.Media.VisualTreeHelper.GetParent(d);
+        }
+        // 命中的是本窗口之外的子树（极少见）：交给默认处理
+        return ReferenceEquals(src, _chrome);
     }
 
     /// <summary>命中的是不是可交互控件（按钮、输入框、列表等）。用于区分"拖岛"与"点控件"。</summary>
@@ -530,11 +567,11 @@ public partial class MainWindow : Window
         if (!_chrome.IsExpanded || _passthrough) return;
 
         // DWM 模式下窗口每帧贴着药丸改尺寸，指针可能暂时落到"新窗口矩形之外"，
-        // WPF 会误报 MouseLeave → 收起 → 又因为指针回到窗口上而展开，来回抖。
-        // 只要指针还在本体矩形内就当作没离开。
-        if (_chrome.BodyRect.Contains(Mouse.GetPosition(_chrome))) return;
-        // 动画进行中也不收
-        if (_glassAnimating) return;
+        // WPF 会误报 MouseLeave → 收起 → 又回到窗口上展开，来回抖。
+        // 注意：不能用 Mouse.GetPosition —— 指针已离开窗口时它返回的是**缓存的旧位置**，
+        // 会让这里永远判定"还在岛内"，于是彻底收不起来（踩过）。
+        // 改用系统真实光标位置与本体的屏幕矩形比较。
+        if (CursorInBody()) return;
         if (ServiceHub.Config.Get("island.pinned", false)) return;
         // 菜单/对话框打开期间不收
         if (_uiLocks.Count > 0) return;
@@ -542,6 +579,20 @@ public partial class MainWindow : Window
         if (IsKeyboardFocusWithin && Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase) return;
         _collapseTimer.Stop();
         _collapseTimer.Start();
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT pt);
+
+    /// <summary>系统真实光标是否落在本体（药丸）矩形内。</summary>
+    private bool CursorInBody()
+    {
+        if (!GetCursorPos(out var pt)) return false;
+        var body = BodyScreenRect();          // DIP
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var sx = dpi.DpiScaleX <= 0 ? 1 : dpi.DpiScaleX;
+        var sy = dpi.DpiScaleY <= 0 ? 1 : dpi.DpiScaleY;
+        return body.Contains(new Point(pt.X / sx, pt.Y / sy));
     }
 
     /// <summary>把所有页面按展开尺寸量一遍（只测量不显示），消除首次展开的布局尖峰。</summary>
@@ -601,7 +652,9 @@ public partial class MainWindow : Window
         // 系统模糊模式下窗口必须贴合胶囊：accent 模糊是窗口矩形级的。
         // 但逐帧 SetWindowPos 会让 DWM 每帧重新合成亚克力 → 展开/收起卡成幻灯片。
         // 因此：动画期间关掉 accent、把窗口一次性设成"目标尺寸包络"，动画结束再贴回药丸。
-        if (_chrome.SystemGlass && !(moving || navMoving)) EndGlassAnim();
+        // 只要"尺寸"弹簧到位就恢复玻璃，不要等内容淡入弹簧（那个要 ~1s，
+        // 于是模糊会延迟约 1 秒才出现）。
+        if (_chrome.SystemGlass && SizeSettled()) EndGlassAnim();
 
         // 光标位置 → 收起态形变与形象视线
         var mouse = Mouse.GetPosition(_chrome);
@@ -1189,6 +1242,14 @@ public partial class MainWindow : Window
     private void SyncGlassWindowGeometry() => SyncGlassWindow(_chrome.BodySize);
 
     private bool _glassAnimating;
+
+    /// <summary>本体尺寸是否已经到目标（用于尽早恢复 DWM 模糊）。</summary>
+    private bool SizeSettled()
+    {
+        var (w, h) = _chrome.BodySize;
+        var (tw, th) = _chrome.BodyTarget;
+        return Math.Abs(w - tw) < 0.8 && Math.Abs(h - th) < 0.8;
+    }
 
     private readonly System.Windows.Threading.DispatcherTimer _glassResume =
         new() { Interval = TimeSpan.FromMilliseconds(90) };
