@@ -85,5 +85,33 @@
         <TextBlock x:Name="ErrText" Grid.Row="2" Text="暂无天气数据" Style="{StaticResource T2}"
                    HorizontalAlignment="Center" VerticalAlignment="Center"
                    TextWrapping="Wrap" TextAlignment="Center" Visibility="Collapsed"/>
+
+        <!-- 城市候选选择面板（覆盖整页；选择后才真正添加） -->
+        <Border x:Name="PickerHost" Grid.RowSpan="3" Visibility="Collapsed"
+                Background="#F2101014" CornerRadius="12" Padding="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0">
+                    <TextBlock x:Name="PickerTitle" Text="选择城市" Style="{StaticResource T2}"
+                               FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <Button Content="&#xE711;" Style="{StaticResource IconBtn}" Width="24" Height="24"
+                            FontSize="11" HorizontalAlignment="Right" Click="PickerCancel_Click"
+                            ToolTip="取消"/>
+                </Grid>
+
+                <ScrollViewer Grid.Row="1" Margin="0,6,0,0" VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="PickerList"/>
+                </ScrollViewer>
+
+                <TextBlock Grid.Row="2" Text="同名地点很多，请按「省份 · 国家 · 坐标」确认是你要的那个"
+                           Style="{StaticResource T3}" FontSize="10.5" Margin="0,6,0,0"
+                           TextWrapping="Wrap"/>
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

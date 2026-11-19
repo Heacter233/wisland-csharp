@@ -143,27 +143,110 @@ public class WeatherService : IWeatherService, IDisposable
     {
         try
         {
-            var url = $"{OmGeo}?name={Uri.EscapeDataString(cityName)}&count=5&language=zh&format=json";
-            using var resp = await _http.GetAsync(url);
-            if (!resp.IsSuccessStatusCode) return null;
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            // Open-Meteo 的地名库里，地级市常以「朝阳市」这种带后缀的形式存在，
+            // 直接搜「朝阳」只会命中同名的区/镇（还有外国的同名点），
+            // 于是用户回车后就加到了别的地方。这里多查一次带后缀的名字再合并。
+            var queries = new List<string> { cityName };
+            var raw = cityName.Trim();
+            var hasSuffix = raw.EndsWith("市", StringComparison.Ordinal)
+                         || raw.EndsWith("区", StringComparison.Ordinal)
+                         || raw.EndsWith("县", StringComparison.Ordinal)
+                         || raw.EndsWith("镇", StringComparison.Ordinal);
+            var isCjk = raw.Any(c => c >= 0x4E00 && c <= 0x9FFF);
+            if (!hasSuffix && isCjk) queries.Add(raw + "市");
+
             var list = new List<WeatherGeoResult>();
-            if (doc.RootElement.TryGetProperty("results", out var results))
-                foreach (var r in results.EnumerateArray())
-                {
-                    list.Add(new WeatherGeoResult
-                    {
-                        Name = Str(r, "name"), Lat = Dbl(r, "latitude"), Lon = Dbl(r, "longitude"),
-                        Country = Str(r, "country"), State = Str(r, "admin1"),
-                    });
-                }
-            return list;
+            foreach (var q in queries)
+            {
+                var part = await QueryGeoAsync(q, q == raw ? 15 : 6);
+                if (part != null) list.AddRange(part);
+            }
+            if (list.Count == 0) return list;
+
+            // 去重（同一坐标只留一条）
+            var deduped = new List<WeatherGeoResult>();
+            foreach (var item in list)
+            {
+                if (deduped.Exists(d => Math.Abs(d.Lat - item.Lat) < 0.01 && Math.Abs(d.Lon - item.Lon) < 0.01))
+                    continue;
+                deduped.Add(item);
+            }
+
+            // 按 行政级别 + 人口 + 本国 排序：地级市/省会排在同名小村庄前面
+            deduped.Sort((a, b) => Score(b, isCjk).CompareTo(Score(a, isCjk)));
+            return deduped;
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[WeatherService] SearchCity: {ex.Message}");
             return null;
         }
+    }
+
+    private async Task<List<WeatherGeoResult>?> QueryGeoAsync(string name, int count)
+    {
+        try
+        {
+            var url = $"{OmGeo}?name={Uri.EscapeDataString(name)}&count={count}&language=zh&format=json";
+            using var resp = await _http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode) return null;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+
+            var list = new List<WeatherGeoResult>();
+            if (doc.RootElement.TryGetProperty("results", out var results))
+                foreach (var r in results.EnumerateArray())
+                {
+                    list.Add(new WeatherGeoResult
+                    {
+                        Name = Str(r, "name"),
+                        Lat = Dbl(r, "latitude"),
+                        Lon = Dbl(r, "longitude"),
+                        Country = Str(r, "country"),
+                        CountryCode = Str(r, "country_code"),
+                        State = Str(r, "admin1"),
+                        Admin2 = Str(r, "admin2"),
+                        Population = r.TryGetProperty("population", out var pop) && pop.ValueKind == JsonValueKind.Number
+                            ? (long)pop.GetDouble() : 0,
+                        Key = r.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.Number
+                            ? id.GetInt64().ToString() : "",
+                        FeatureCode = Str(r, "feature_code"),
+                    });
+                }
+            return list;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WeatherService] QueryGeo({name}): {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 排序评分：本国 + 行政级别 + 人口规模。
+    ///
+    /// 只按人口排会被同名小镇挤掉真正的地级市，所以给 feature_code 加权：
+    /// 首都 &gt; 一级行政区驻地 &gt; 二级 &gt; 三级 &gt; 普通城市。
+    /// </summary>
+    private static double Score(WeatherGeoResult r, bool preferCn)
+    {
+        var score = Math.Log10(Math.Max(1, r.Population));
+
+        // geonames feature_code：PPLC 首都 / PPLA 一级驻地 / PPLA2、PPLA3 下级
+        var fc = r.FeatureCode.ToUpperInvariant();
+        score += fc switch
+        {
+            "PPLC" => 4.0,
+            "PPLA" => 3.2,
+            "PPLA2" => 2.4,
+            "PPLA3" => 1.8,
+            "PPLA4" => 1.2,
+            "PPL" => 0.8,
+            _ => 0.0,
+        };
+
+        if (preferCn && string.Equals(r.CountryCode, "CN", StringComparison.OrdinalIgnoreCase))
+            score += 2.0;
+        return score;
     }
 
     private WeatherState Parse(JsonElement root, string cityName)

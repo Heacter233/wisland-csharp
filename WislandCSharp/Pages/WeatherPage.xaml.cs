@@ -531,24 +531,192 @@ public partial class WeatherPage : UserControl
         var q = AddBox.Text.Trim();
         if (q.Length == 0) { CancelAdd(); return; }
 
+        // 支持直接填坐标："31.23,121.47" 或 "31.23 121.47"
+        if (TryParseCoord(q, out var lat, out var lon))
+        {
+            AddCity($"自定义位置 {lat:0.0},{lon:0.0}", lat, lon);
+            return;
+        }
+
         MsgText.Text = $"正在查找 {q}…";
         var results = await ServiceHub.Weather.SearchCityAsync(q);
-        if (results is { Count: > 0 })
-        {
-            var r = results[0];
-            _cities.Add(new CityEntry { Name = r.Name, Lat = r.Lat, Lon = r.Lon });
-            _selected = _cities.Count - 1;
-            SaveCitiesCfg();
-            MsgText.Text = $"已添加 {r.Name}";
-            BuildChips();
-            SelectCity(_selected);
-        }
-        else
+        if (results is not { Count: > 0 })
         {
             MsgText.Text = $"未找到 {q}";
+            _msgClear.Start();
+            CancelAdd();
+            Keyboard.ClearFocus();
+            return;
         }
-        _msgClear.Start();
+
+        // 只有一个候选：直接添加，省一次点击
+        if (results.Count == 1)
+        {
+            AddCity(results[0]);
+            return;
+        }
+
+        // 多个候选：列出让用户按「省份 · 国家 · 坐标」确认，避免加到同名小镇
+        ShowPicker(q, results);
+    }
+
+    /// <summary>解析 "lat,lon" 形式的坐标输入（容忍全角符号与中文输入法带来的差异）。</summary>
+    private static bool TryParseCoord(string text, out double lat, out double lon)
+    {
+        lat = 0; lon = 0;
+
+        // 中文输入法常把 . , 打成全角，先把它们归一化，否则数字解析会失败
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (var ch in text)
+        {
+            sb.Append(ch switch
+            {
+                '。' or '．' or '·' => '.',
+                '，' or '、' => ',',
+                >= '０' and <= '９' => (char)(ch - '０' + '0'),
+                _ => ch,
+            });
+        }
+
+        var parts = sb.ToString().Split(new[] { ',', ';', ' ', '\t' },
+            StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2) return false;
+
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        if (!double.TryParse(parts[0], System.Globalization.NumberStyles.Float, ci, out lat)) return false;
+        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float, ci, out lon)) return false;
+        return lat is >= -90 and <= 90 && lon is >= -180 and <= 180;
+    }
+
+    // ---------------- 候选选择 ----------------
+
+    private List<WeatherGeoResult> _pickerResults = new();
+
+    private void ShowPicker(string query, List<WeatherGeoResult> results)
+    {
+        _pickerResults = results;
+        PickerTitle.Text = $"「{query}」有 {results.Count} 个地点，选一个";
+        PickerList.Children.Clear();
+
+        for (var i = 0; i < results.Count; i++)
+        {
+            var r = results[i];
+            var idx = i;
+
+            var row = new Border
+            {
+                Padding = new Thickness(9, 6, 9, 7),
+                Margin = new Thickness(0, 0, 0, 4),
+                CornerRadius = new CornerRadius(9),
+                Background = new SolidColorBrush(Themes.Card()),
+                Cursor = Cursors.Hand,
+            };
+
+            var sp = new StackPanel();
+            var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
+            titleRow.Children.Add(new TextBlock
+            {
+                Text = r.Label,
+                FontSize = 12.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Themes.Text()),
+                TextWrapping = TextWrapping.Wrap,
+            });
+            // 第一条按行政级别+人口评为最可能的目标，标一个「推荐」减少误选
+            if (i == 0)
+            {
+                titleRow.Children.Add(new Border
+                {
+                    Margin = new Thickness(6, 0, 0, 0),
+                    Padding = new Thickness(6, 0, 6, 1),
+                    CornerRadius = new CornerRadius(7),
+                    Background = new SolidColorBrush(Themes.ActivePill()),
+                    Child = new TextBlock
+                    {
+                        Text = "推荐",
+                        FontSize = 10,
+                        Foreground = new SolidColorBrush(Themes.PillText()),
+                    },
+                });
+            }
+            sp.Children.Add(titleRow);
+            sp.Children.Add(new TextBlock
+            {
+                Text = $"{r.CoordText}" + (r.Population > 0 ? $" · 人口 {FormatPop(r.Population)}" : ""),
+                FontSize = 10.5,
+                Margin = new Thickness(0, 2, 0, 0),
+                Foreground = new SolidColorBrush(Themes.Text3()),
+            });
+            row.Child = sp;
+
+            row.MouseLeftButtonUp += (_, _) =>
+            {
+                var chosen = _pickerResults[idx];
+                HidePicker();
+                AddCity(chosen);
+            };
+            row.MouseEnter += (_, _) => row.Background = new SolidColorBrush(Themes.Hover());
+            row.MouseLeave += (_, _) => row.Background = new SolidColorBrush(Themes.Card());
+
+            PickerList.Children.Add(row);
+        }
+
+        PickerHost.Visibility = Visibility.Visible;
+        MsgText.Text = "";
+        Keyboard.ClearFocus();
+    }
+
+    private static string FormatPop(long n) => n >= 10000 ? $"{n / 10000.0:0.#}万" : n.ToString();
+
+    private void HidePicker()
+    {
+        PickerHost.Visibility = Visibility.Collapsed;
+        PickerList.Children.Clear();
+        _pickerResults = new List<WeatherGeoResult>();
+    }
+
+    private void PickerCancel_Click(object sender, RoutedEventArgs e)
+    {
+        HidePicker();
         CancelAdd();
+    }
+
+    /// <summary>用地理编码结果添加城市（名字带省市以便区分）。</summary>
+    private void AddCity(WeatherGeoResult r)
+    {
+        var display = string.IsNullOrWhiteSpace(r.State) || r.State == r.Name
+            ? r.Name
+            : $"{r.Name} · {r.State}";
+        AddCity(display, r.Lat, r.Lon);
+    }
+
+    private void AddCity(string name, double lat, double lon)
+    {
+        // 去重：坐标接近（<0.05°）视为同一地点，避免重复添加同名城市
+        var exist = _cities.FindIndex(c =>
+            Math.Abs(c.Lat - lat) < 0.05 && Math.Abs(c.Lon - lon) < 0.05);
+        if (exist >= 0)
+        {
+            MsgText.Text = $"「{name}」已在列表里";
+            _selected = exist;
+            HidePicker();
+            CancelAdd();
+            BuildChips();
+            SelectCity(exist);
+            _msgClear.Start();
+            Keyboard.ClearFocus();
+            return;
+        }
+
+        _cities.Add(new CityEntry { Name = name, Lat = lat, Lon = lon });
+        _selected = _cities.Count - 1;
+        SaveCitiesCfg();
+        MsgText.Text = $"已添加 {name}（{lat:0.00}, {lon:0.00}）";
+        HidePicker();
+        CancelAdd();
+        BuildChips();
+        SelectCity(_selected);
+        _msgClear.Start();
         // 添加完成后主动释放键盘焦点，否则会残留一个虚线焦点框（分层窗口下尤其明显）
         Keyboard.ClearFocus();
     }

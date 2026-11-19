@@ -242,7 +242,7 @@ public partial class MainWindow : Window
         _chrome = new IslandChrome(_compact, host) { AnchorEdge = _edge };
         _backdrop = new Backdrop();
         _chrome.Backdrop = _backdrop;
-        _chrome.ExpandedHeight = () => CurrentPageHeight() + 66;
+        _chrome.ExpandedHeight = () => CurrentPageHeight() + ChromeExtra;
         _chrome.DragRequested += (_, _) => BeginDrag();
         _chrome.PlayPauseRequested += (_, _) => ServiceHub.Media.SetPlayPause();
         _chrome.ViewCycled += (_, d) => CycleCompactView(d);
@@ -291,6 +291,20 @@ public partial class MainWindow : Window
         // 高度稍后按"所有页面的最大展开高度"再算（FitWindowToPages）
     }
 
+    /// <summary>展开态里除页面内容之外的高度：导航 36 + 间隔 8 + 上下内边距 22。</summary>
+    private const double ChromeBaseExtra = 66;
+
+    /// <summary>插件图标行高度（图标 26 + 上边距 4）。</summary>
+    private const double PluginRowHeight = 30;
+
+    /// <summary>
+    /// 展开态额外高度。有插件页图标行时要把这一行算进去，
+    /// 否则页面底部的启动栏 / 天气逐时区会被裁掉。
+    /// </summary>
+    private double ChromeExtra =>
+        ChromeBaseExtra + (_pluginBar != null && _pluginBar.Visibility == Visibility.Visible
+            ? PluginRowHeight : 0);
+
     /// <summary>当前页面要求的高度（页面自身 Height 优先）。</summary>
     private double CurrentPageHeight()
     {
@@ -338,7 +352,7 @@ public partial class MainWindow : Window
             var h = content?.DesiredSize.Height ?? 0;
             if (h < 10) h = CurrentPageHeight();
             _pageHeights[key] = h;
-            _chrome.RetargetExpandedHeight(h + 66);
+            _chrome.RetargetExpandedHeight(h + ChromeExtra);
             _chrome.InvalidateMeasure();
             if (_chrome.SystemGlass)
             {
@@ -361,7 +375,7 @@ public partial class MainWindow : Window
                     if (h2 > 10 && Math.Abs(h2 - h) > 2)
                     {
                         _pageHeights[key] = h2;
-                        _chrome.RetargetExpandedHeight(h2 + 66);
+                        _chrome.RetargetExpandedHeight(h2 + ChromeExtra);
                         _chrome.InvalidateMeasure();
                         if (_chrome.SystemGlass) BeginGlassAnim();
                     }
@@ -423,6 +437,12 @@ public partial class MainWindow : Window
         }
 
         _pluginBar.Visibility = _pluginPages.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // 插件图标行一旦出现，展开态要多占这一行的高度；
+        // 若此刻岛已展开（比如开机后立即展开），需要立刻重算，否则页面底部被裁。
+        if (_chrome != null && _chrome.IsExpanded)
+            _chrome.RetargetExpandedHeight(CurrentPageHeight() + ChromeExtra);
+
         App.DebugNote($"plugin pages: {_pluginPages.Count}");
     }
 
@@ -791,7 +811,7 @@ public partial class MainWindow : Window
             ServiceHub.PopUiLock = key => { _uiLocks.Remove(key); };
             ServiceHub.RequestRetargetHeight = () =>
             {
-                if (_chrome.IsExpanded) _chrome.RetargetExpandedHeight(CurrentPageHeight() + 66);
+                if (_chrome.IsExpanded) _chrome.RetargetExpandedHeight(CurrentPageHeight() + ChromeExtra);
                 else _chrome.RetargetCompact();
             };
 
@@ -1165,7 +1185,7 @@ public partial class MainWindow : Window
                 page.Arrange(new Rect(0, 0, w, h));
             }
             // 展开高度也提前算一次
-            _chrome.ExpandedHeight = () => CurrentPageHeight() + 66;
+            _chrome.ExpandedHeight = () => CurrentPageHeight() + ChromeExtra;
             _ = CurrentPageHeight();
             FitWindowToPages();
         }
@@ -1289,7 +1309,7 @@ public partial class MainWindow : Window
         if (_chrome.IsExpanded) return;
         _hoverTimer.Stop();
         _collapseTimer.Stop();
-        _chrome.ExpandedHeight = () => CurrentPageHeight() + 66;
+        _chrome.ExpandedHeight = () => CurrentPageHeight() + ChromeExtra;
 
         // 展开后提示区没有意义，先清掉
         _notifyQueue.Clear();
@@ -1456,7 +1476,7 @@ public partial class MainWindow : Window
         foreach (var h in _pageHeights.Values) maxH = Math.Max(maxH, h);
 
         // +10 余量：本体高度恰好顶到窗口边缘时，底部圆弧和描边会被窗口裁掉几个像素
-        var need = maxH + 66 + 2 * IslandChrome.WindowPad + 10;
+        var need = maxH + ChromeExtra + 2 * IslandChrome.WindowPad + 10;
 
         var target = Math.Max(FixedWindowHeight, Math.Ceiling(need));
         if (Math.Abs(Height - target) < 1) return;

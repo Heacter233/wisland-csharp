@@ -239,14 +239,22 @@
         <Setter Property="Background" Value="{DynamicResource AppCard}"/>
         <Setter Property="Foreground" Value="{DynamicResource AppText}"/>
         <Setter Property="CaretBrush" Value="{DynamicResource AppText}"/>
+        <!-- 选中文字：默认系统高亮在透明分层窗口里几乎看不见，显式指定并加不透明度 -->
+        <Setter Property="SelectionBrush" Value="{DynamicResource AppOn}"/>
+        <Setter Property="SelectionOpacity" Value="0.75"/>
+        <Setter Property="SelectionTextBrush" Value="{DynamicResource AppText}"/>
         <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
         <Setter Property="FontSize" Value="13"/>
-        <Setter Property="Padding" Value="10,8"/>
+        <!-- 垂直内边距不能太大：多数调用点显式给了 30~34 的高度，
+             原来 8+8 的上下内边距会把内容区压到只剩几像素，文字被裁掉看不见 -->
+        <Setter Property="Padding" Value="8,0"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TextBox">
                     <Border Background="{TemplateBinding Background}" CornerRadius="12"
+                            BorderBrush="{DynamicResource AppOutline}" BorderThickness="1"
                             Padding="{TemplateBinding Padding}">
                         <ScrollViewer x:Name="PART_ContentHost"/>
                     </Border>
