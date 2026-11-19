@@ -87,6 +87,7 @@
 | --- | --- | --- |
 | `messages.push` | `ctx.PushMessage(...)` 推进消息页 | 调用被拒绝并记 WRN 日志 |
 | `ui.settings` | `ctx.RegisterSettingsSection(...)` 提供设置面板 | 设置面板不出现 |
+| `ui.page` | `ctx.RegisterPage(...)` 注册插件页面 | 页面不出现（图标行也不会显示） |
 | `ui.compact` | 通知里用 `NotifyDraw` 在收起态自绘 | 自绘被剥离，只显示文字 |
 | `notify.image` | 通知里用 `NotifyImage` 显示图片 | 图片被剥离 |
 | `network` | 访问外网（http/https） | 声明性质，宿主不做拦截 |
@@ -135,6 +136,18 @@ public interface IPluginContext
 
     IDisposable RegisterTimer(TimeSpan interval, Action tick, bool runOnUi = true);
     void RegisterSettingsSection(string title, string subtitle, Func<FrameworkElement> build);
+
+    /// 注册插件页面（需 ui.page）：图标出现在主导航下方的一行
+    void RegisterPage(PluginPageDescriptor page);
+}
+
+public sealed class PluginPageDescriptor
+{
+    public string Key { get; init; }        // 页面 key，用于 RequestExpand("你的key")
+    public string Title { get; init; }      // 悬停提示
+    public string Glyph { get; init; }      // Segoe MDL2 Assets 码位
+    public double Height { get; init; }     // 内容高度（DIP，建议 200~400）
+    public Func<FrameworkElement> Build { get; init; }  // 延迟构建页面内容（UI 线程）
 }
 ```
 
@@ -252,6 +265,42 @@ private FrameworkElement BuildPanel()
 
 ---
 
+## 6.5 插件页面（ui.page）
+
+插件可以注册自己的页面，**也可以不注册**：
+
+- 注册了 → 图标出现在**主导航下方单独一行**；插件多时该行**横向滚动**（滚轮可横向滑）
+- 没注册 → 该行完全不出现，其他元素位置不变（不占高度）
+
+```csharp
+context.RegisterPage(new PluginPageDescriptor
+{
+    Key = "clash",                       // 也可用于 ctx.RequestExpand("clash")
+    Title = "Clash 控制",
+    Glyph = "\uE774",
+    Height = 320,                        // 内容区高度
+    Build = BuildClashPage,              // 延迟构建，UI 线程
+});
+```
+
+**页面内容规范**
+
+| 项 | 要求 |
+| --- | --- |
+| 宽度 | 宿主给约 **616**（与内置页一致），不要写死更宽 |
+| 高度 | 由 `Height` 决定（不含导航与内边距）；内容超出请自己放滚动容器 |
+| 选中态 | 插件页与内置页**互斥**：点插件页时主导航全部收起高亮，反之亦然 |
+| 主题 | 同设置面板：只用 `AppText*` / `AppCard` / `T1|T2|T3` / `Card` 等资源 |
+| 自建滚动 | 用宿主的 `ScrollHost` 或普通 `ScrollViewer`（注意别套两层抢滚轮） |
+| 焦点 | 不要把键盘焦点抢到页面外；需要输入时用 `AppBox` 样式 |
+| 异常 | `Build()` 抛异常会被宿主捕获并显示错误占位，**但请自己 try/catch 并记日志** |
+| 生命周期 | 页面可能被反复切走/切回；`Build()` 只调用一次，返回的元素会被复用 |
+
+> 多插件时图标行最多显示约 15 个（30px 宽 + 间距），超出横向滚动；
+> 建议一个插件只注册 1 个页面，把内部切换做成页面里的分段控件。
+
+---
+
 ## 7. 禁止事项（硬性）
 
 违反以下任一条，宿主可以拒绝加载或在评审中打回：
@@ -348,8 +397,8 @@ dotnet build -c Debug
 
 ## 13. 路线图
 
+- [x] 插件可注册导航页（主导航下方一行，横向滚动）
 - [ ] 进程隔离（真沙箱，崩溃不影响宿主）
 - [ ] 首次加载时的权限确认弹窗
 - [ ] 插件热重载
 - [ ] 插件市场 / 索引
-- [ ] 插件可注册导航页（当前只能进设置页）

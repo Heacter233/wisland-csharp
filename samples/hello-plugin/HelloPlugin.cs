@@ -31,6 +31,16 @@ public sealed class HelloPlugin : IWislandPlugin
         // 设置面板：延迟构建（宿主在设置页打开时才调用）
         context.RegisterSettingsSection("示例插件", "演示消息推送与宿主定时器", BuildPanel);
 
+        // 插件页面：图标出现在主导航下方一行（需要 ui.page）
+        context.RegisterPage(new PluginPageDescriptor
+        {
+            Key = "hello",
+            Title = "示例页面",
+            Glyph = "\uE8BD",
+            Height = 260,
+            Build = BuildPage,
+        });
+
         // 宿主托管的定时器：卸载时自动释放；最小间隔 100ms
         _timer = context.RegisterTimer(TimeSpan.FromSeconds(3), () =>
         {
@@ -128,6 +138,46 @@ public sealed class HelloPlugin : IWislandPlugin
             Margin = new Thickness(0, 10, 0, 0),
             TextWrapping = TextWrapping.Wrap,
         }, "T3"));
+
+        return root;
+    }
+
+    // ---------------- 插件页面（ui.page） ----------------
+
+    /// <summary>
+    /// 页面内容会被放进宿主内容区（宽度约 616），高度由 PluginPageDescriptor.Height 决定。
+    /// 规范与设置面板一致：用宿主主题资源、不要自建 Window、不要阻塞 UI 线程。
+    /// </summary>
+    private FrameworkElement BuildPage()
+    {
+        var root = new StackPanel { Margin = new Thickness(4, 4, 4, 0) };
+
+        root.Children.Add(Styled(new TextBlock
+        {
+            Text = "示例插件页面",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 6),
+        }, "T1"));
+
+        root.Children.Add(Styled(new TextBlock
+        {
+            Text = "这个页面由插件注册（ui.page），图标在主导航下方。\n"
+                 + "插件页与内置页互斥选中；不注册页面的插件不会出现在这一行。",
+            TextWrapping = TextWrapping.Wrap,
+        }, "T3"));
+
+        var card = new Border { Margin = new Thickness(0, 12, 0, 0), Padding = new Thickness(12) };
+        card.SetResourceReference(FrameworkElement.StyleProperty, "Card");
+        var inner = new StackPanel();
+        inner.Children.Add(Styled(new TextBlock { Text = "宿主定时器", FontWeight = FontWeights.SemiBold }, "T2"));
+        inner.Children.Add(Styled(new TextBlock
+        {
+            Text = $"已触发 {_ticks} 次（每 3 秒）",
+            Margin = new Thickness(0, 6, 0, 0),
+        }, "T3"));
+        card.Child = inner;
+        root.Children.Add(card);
 
         return root;
     }

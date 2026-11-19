@@ -42,6 +42,7 @@
         "enum": [
           "messages.push",
           "ui.settings",
+          "ui.page",
           "ui.compact",
           "network",
           "network.local",

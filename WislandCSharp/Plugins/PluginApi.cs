@@ -25,6 +25,9 @@ public static class PluginPermissions
     /// <summary>在收起态胶囊内自绘（NotifyDraw）。</summary>
     public const string CompactDraw = "ui.compact";
 
+    /// <summary>注册插件自己的导航页（会出现在导航栏下方的一行）。</summary>
+    public const string UiPage = "ui.page";
+
     /// <summary>访问外网（http/https）。</summary>
     public const string Network = "network";
 
@@ -48,7 +51,7 @@ public static class PluginPermissions
 
     public static readonly IReadOnlyList<string> All = new[]
     {
-        MessagesPush, SettingsPanel, CompactDraw, Network, NetworkLocal,
+        MessagesPush, SettingsPanel, CompactDraw, UiPage, Network, NetworkLocal,
         ProcessStart, ClipboardRead, FilesUser, NotifyImage, SystemInfo,
     };
 
@@ -56,6 +59,30 @@ public static class PluginPermissions
         !string.IsNullOrWhiteSpace(permission) &&
         new List<string>((IEnumerable<string>)All)
             .Exists(p => string.Equals(p, permission, StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>
+/// 插件注册的导航页。图标会出现在顶部导航栏下方的独立一行。
+/// </summary>
+public sealed class PluginPageDescriptor
+{
+    /// <summary>页面 key（用于 RequestExpand 跳转），建议 "&lt;插件id&gt;" 或 "&lt;插件id&gt;.&lt;名字&gt;"。</summary>
+    public string Key { get; init; } = "";
+
+    /// <summary>悬停提示 / 无障碍标题。</summary>
+    public string Title { get; init; } = "";
+
+    /// <summary>图标字形（Segoe MDL2 Assets 码位，如 "\uE774"）。</summary>
+    public string Glyph { get; init; } = "";
+
+    /// <summary>页面内容高度（DIP，不含导航与内边距）。建议 200~400。</summary>
+    public double Height { get; init; } = 300;
+
+    /// <summary>
+    /// 构建页面内容（延迟调用，在 UI 线程）。
+    /// 返回的元素会被放进宿主的内容区，宽度约为 616，高度由 <see cref="Height"/> 决定。
+    /// </summary>
+    public Func<FrameworkElement> Build { get; init; } = () => new System.Windows.Controls.StackPanel();
 }
 
 /// <summary>
@@ -131,6 +158,13 @@ public interface IPluginContext
     /// <paramref name="build"/> 会被延迟调用（在 UI 线程），可以安全创建 WPF 控件。
     /// </summary>
     void RegisterSettingsSection(string title, string subtitle, Func<FrameworkElement> build);
+
+    /// <summary>
+    /// 注册一个插件页面（需要 ui.page）：图标出现在顶部导航下方的独立一行，
+    /// 点开后在内容区显示 <see cref="PluginPageDescriptor.Build"/> 返回的元素。
+    /// 一个插件可以注册多个页面；不注册则不会出现在那一行。
+    /// </summary>
+    void RegisterPage(PluginPageDescriptor page);
 }
 
 /// <summary>插件独立配置：键空间与宿主 config.json 分离。</summary>

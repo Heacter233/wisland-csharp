@@ -62,6 +62,14 @@ public sealed class NavBar : FrameworkElement
         InvalidateVisual();
     }
 
+    /// <summary>取消选中（用于切换到插件页时，让高亮不落在主导航上）。</summary>
+    public void ClearSelection()
+    {
+        for (var j = 0; j < _widths.Count; j++) _widths[j].To(IconW);
+        _index = -1;
+        InvalidateVisual();
+    }
+
     public void SetBadge(string key, int n)
     {
         BadgeValues[key] = n;
@@ -109,9 +117,12 @@ public sealed class NavBar : FrameworkElement
         var rects = Rects();
         if (rects.Count == 0) return;
 
-        // 当前项底块
-        var ar = rects[_index];
-        dc.DrawRoundedRectangle(new SolidColorBrush(Themes.ActivePill()), null, ar, ar.Height / 2, ar.Height / 2);
+        // 当前项底块（_index = -1 表示当前是插件页，主导航全部收起）
+        if (_index >= 0 && _index < rects.Count)
+        {
+            var ar = rects[_index];
+            dc.DrawRoundedRectangle(new SolidColorBrush(Themes.ActivePill()), null, ar, ar.Height / 2, ar.Height / 2);
+        }
 
         for (var i = 0; i < _items.Count; i++)
         {

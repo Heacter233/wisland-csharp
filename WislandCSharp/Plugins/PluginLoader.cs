@@ -33,6 +33,8 @@ public sealed class PluginLoadResult
     public Func<System.Windows.FrameworkElement>? SettingsBuild { get; init; }
     public string SettingsTitle { get; init; } = "";
     public string SettingsSubtitle { get; init; } = "";
+    /// <summary>插件注册的页面（可能为空）。</summary>
+    public IReadOnlyList<PluginPageDescriptor> Pages { get; init; } = Array.Empty<PluginPageDescriptor>();
     internal IWislandPlugin? Instance { get; init; }
     internal PluginHostContext? Context { get; init; }
     internal PluginLoadContext? LoadContext { get; init; }
@@ -218,6 +220,7 @@ public static class PluginLoader
                 SettingsBuild = ctx.SettingsBuild,
                 SettingsTitle = ctx.SettingsTitle,
                 SettingsSubtitle = ctx.SettingsSubtitle,
+                Pages = ctx.Pages,
                 Instance = instance,
                 Context = ctx,
                 LoadContext = alc,

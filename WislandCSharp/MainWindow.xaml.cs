@@ -87,6 +87,11 @@ public partial class MainWindow : Window
     private IslandChrome _chrome = null!;
     private NavBar _nav = null!;
     private ContentControl _pageHost = null!;
+    private Border _pluginBar = null!;
+    private StackPanel _pluginRow = null!;
+
+    /// <summary>插件页：key → (视图, 内容高度, 图标按钮)。</summary>
+    private readonly Dictionary<string, (FrameworkElement View, double Height, Button Btn)> _pluginPages = new();
     private readonly Dictionary<string, UserControl> _pages = new();
     private readonly Dictionary<string, double> _pageHeights = new()
     {
@@ -184,13 +189,44 @@ public partial class MainWindow : Window
 
         _pageHost = new ContentControl { HorizontalAlignment = HorizontalAlignment.Stretch };
 
+        // 插件页图标行：默认隐藏（无插件时高度 0，不影响其他元素位置）
+        _pluginRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var pluginScroll = new ScrollViewer
+        {
+            Content = _pluginRow,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            PanningMode = PanningMode.HorizontalOnly,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            MaxWidth = 560,
+        };
+        pluginScroll.PreviewMouseWheel += (_, e) =>
+        {
+            pluginScroll.ScrollToHorizontalOffset(pluginScroll.HorizontalOffset - e.Delta);
+            e.Handled = true;
+        };
+        _pluginBar = new Border
+        {
+            Child = pluginScroll,
+            Margin = new Thickness(0, 4, 0, 0),
+            Visibility = Visibility.Collapsed,
+        };
+
         var inner = new Grid();
-        inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(36) });
-        inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(36) });   // 主导航
+        inner.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });      // 插件页图标行（无插件时高度为 0）
+        inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });    // 间隔
         inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         Grid.SetRow(_nav, 0);
-        Grid.SetRow(_pageHost, 2);
+        Grid.SetRow(_pluginBar, 1);
+        Grid.SetRow(_pageHost, 3);
         inner.Children.Add(_nav);
+        inner.Children.Add(_pluginBar);
         inner.Children.Add(_pageHost);
 
         var host = new Border
@@ -258,26 +294,48 @@ public partial class MainWindow : Window
     /// <summary>当前页面要求的高度（页面自身 Height 优先）。</summary>
     private double CurrentPageHeight()
     {
+        if (_pluginPages.TryGetValue(_currentPage, out var pp))
+        {
+            if (pp.View.Height > 10) return pp.View.Height;
+            return pp.Height;
+        }
         if (_pages.TryGetValue(_currentPage, out var page) && page.Height > 10) return page.Height;
         return _pageHeights.GetValueOrDefault(_currentPage, 300);
     }
 
+    /// <summary>当前页面是否为插件页。</summary>
+    private bool IsPluginPage(string key) => _pluginPages.ContainsKey(key);
+
     private void ShowPage(string key, bool force = false)
     {
-        if (!_pages.ContainsKey(key)) return;
+        var isPlugin = IsPluginPage(key);
+        if (!isPlugin && !_pages.ContainsKey(key)) return;
         if (!force && key == _currentPage) return;
         _currentPage = key;
-        _pageHost.Content = _pages[key];
-        _nav.SetCurrent(key);
+
+        if (isPlugin)
+        {
+            var entry = _pluginPages[key];
+            _pageHost.Content = entry.View;
+            _nav.ClearSelection();          // 主选中的高亮让给插件页
+            UpdatePluginSelection(key);
+        }
+        else
+        {
+            _pageHost.Content = _pages[key];
+            _nav.SetCurrent(key);
+            UpdatePluginSelection(null);
+        }
+
+        var content = _pageHost.Content as FrameworkElement;
         if (_chrome.IsExpanded)
         {
             // 新页面的 Height 还是上一次 arrange 的旧值（甚至 0），直接取会拿到旧高度，
             // 于是切到更高的页面（如剪贴板）时底部被裁掉。这里先强制量一次再取高度。
             _pageHost.InvalidateMeasure();
             _pageHost.UpdateLayout();
-            var page = _pages[key];
-            page.Measure(new Size(636, 2000));
-            var h = page.DesiredSize.Height;
+            content?.Measure(new Size(636, 2000));
+            var h = content?.DesiredSize.Height ?? 0;
             if (h < 10) h = CurrentPageHeight();
             _pageHeights[key] = h;
             _chrome.RetargetExpandedHeight(h + 66);
@@ -296,7 +354,8 @@ public partial class MainWindow : Window
                 try
                 {
                     _pageHost.UpdateLayout();
-                    var pg = _pages[key];
+                    var pg = _pageHost.Content as FrameworkElement;
+                    if (pg == null) return;
                     pg.Measure(new Size(636, 2000));
                     var h2 = pg.DesiredSize.Height;
                     if (h2 > 10 && Math.Abs(h2 - h) > 2)
@@ -311,6 +370,171 @@ public partial class MainWindow : Window
             }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
         ServiceHub.Config.Set("island.last_tab", key, save: false);
+    }
+
+    /// <summary>
+    /// 安装插件页面：在主导航下方生成一行图标按钮。
+    /// 没有插件页面时整行保持 Collapsed（高度 0），不影响其他元素位置。
+    /// </summary>
+    private void InstallPluginPages(IReadOnlyList<Plugins.PluginLoadResult> results)
+    {
+        _pluginPages.Clear();
+        _pluginRow.Children.Clear();
+
+        foreach (var r in results)
+        {
+            if (r.State != Plugins.PluginState.Loaded) continue;
+
+            foreach (var page in r.Pages)
+            {
+                var key = page.Key;
+                if (_pluginPages.ContainsKey(key) || _pages.ContainsKey(key))
+                {
+                    App.DebugNote($"plugin page key 冲突，已跳过：{key}");
+                    continue;
+                }
+
+                // 视图延迟构建：首次点开才 Build，避免启动时把 N 个插件页面全部造出来
+                FrameworkElement? view = null;
+                FrameworkElement GetView()
+                {
+                    if (view != null) return view;
+                    try
+                    {
+                        view = page.Build() ?? new StackPanel();
+                    }
+                    catch (Exception ex)
+                    {
+                        App.LogCrash($"plugin page [{key}]", ex);
+                        view = new TextBlock
+                        {
+                            Text = $"插件页面构建失败：{ex.Message}",
+                            Margin = new Thickness(16),
+                            TextWrapping = TextWrapping.Wrap,
+                        };
+                    }
+                    return view;
+                }
+
+                var btn = BuildPluginPageButton(page, key, GetView);
+                _pluginRow.Children.Add(btn);
+                _pluginPages[key] = (new LazyPageHost(GetView, page.Height), page.Height, btn);
+            }
+        }
+
+        _pluginBar.Visibility = _pluginPages.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        App.DebugNote($"plugin pages: {_pluginPages.Count}");
+    }
+
+    /// <summary>插件页图标按钮（与主导航同一套观感）。</summary>
+    private Button BuildPluginPageButton(Plugins.PluginPageDescriptor page, string key, Func<FrameworkElement> getView)
+    {
+        var glyph = string.IsNullOrWhiteSpace(page.Glyph) ? Glyph.Gear : page.Glyph;
+
+        var text = new TextBlock
+        {
+            Text = glyph,
+            FontFamily = new FontFamily(Wisland.Theme.Fonts.Icon),
+            FontSize = 14,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        text.SetResourceReference(TextBlock.ForegroundProperty, "AppText");
+
+        var host = new Border
+        {
+            Width = 30,
+            Height = 26,
+            CornerRadius = new CornerRadius(13),
+            Background = Brushes.Transparent,
+            Child = text,
+        };
+
+        var btn = new Button
+        {
+            Content = host,
+            Width = 36,
+            Margin = new Thickness(2, 0, 2, 0),
+            ToolTip = string.IsNullOrWhiteSpace(page.Title) ? key : $"{page.Title}（插件页面）",
+            Style = null,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            FocusVisualStyle = null,
+            Cursor = Cursors.Hand,
+            Template = BuildFlatButtonTemplate(),
+        };
+        btn.SetResourceReference(Control.ForegroundProperty, "AppText");
+        btn.Click += (_, _) =>
+        {
+            _ = getView();       // 首次点开时构建
+            ShowPage(key);
+        };
+        return btn;
+    }
+
+    private static ControlTemplate BuildFlatButtonTemplate()
+    {
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(13));
+        var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        presenter.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        presenter.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
+        border.AppendChild(presenter);
+
+        var t = new ControlTemplate(typeof(System.Windows.Controls.Primitives.ButtonBase)) { VisualTree = border };
+        return t;
+    }
+
+    /// <summary>高亮当前插件页按钮（null = 取消高亮）。</summary>
+    private void UpdatePluginSelection(string? key)
+    {
+        foreach (var kv in _pluginPages)
+        {
+            var selected = string.Equals(kv.Key, key, StringComparison.Ordinal);
+            kv.Value.Btn.Background = selected
+                ? new SolidColorBrush(Themes.ActivePill())
+                : Brushes.Transparent;
+            if (kv.Value.Btn.Content is Border b && b.Child is TextBlock tb)
+            {
+                tb.Foreground = new SolidColorBrush(selected ? Themes.PillText() : Themes.Text(0.75));
+                tb.InvalidateVisual();
+            }
+        }
+    }
+
+    /// <summary>插件页视图代理：延迟构建，未构建前高度取声明值。</summary>
+    private sealed class LazyPageHost : FrameworkElement
+    {
+        private readonly Func<FrameworkElement> _factory;
+        private FrameworkElement? _child;
+
+        public LazyPageHost(Func<FrameworkElement> factory, double height)
+        {
+            _factory = factory;
+            Height = height;
+        }
+
+        public FrameworkElement Real => _child ??= _factory();
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            var child = Real;
+            child.Measure(new Size(availableSize.Width, double.PositiveInfinity));
+            return new Size(availableSize.Width, double.IsInfinity(availableSize.Height)
+                ? child.DesiredSize.Height : availableSize.Height);
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            Real.Arrange(new Rect(0, 0, finalSize.Width, finalSize.Height));
+            return finalSize;
+        }
+
+        protected override int VisualChildrenCount => Real != null ? 1 : 0;
+
+        protected override Visual GetVisualChild(int index) => Real;
     }
 
     private void CycleCompactView(int d)
@@ -575,6 +799,9 @@ public partial class MainWindow : Window
                     App.LogCrash($"plugin [{r.Manifest?.Id ?? System.IO.Path.GetFileName(r.Directory)}]", new Exception(r.Error));
             }
 
+            // 插件页：主导航下方单独一行（无页面时该行不占高度）
+            InstallPluginPages(results);
+
             App.DebugNote($"plugins: {results.Count} 个目录，成功 {results.Count(x => x.State == Plugins.PluginState.Loaded)}");
         });
 
@@ -585,7 +812,7 @@ public partial class MainWindow : Window
             if (arg != null)
             {
                 var key = arg["--page:".Length..];
-                if (_pages.ContainsKey(key))
+                if (_pages.ContainsKey(key) || IsPluginPage(key))
                 {
                     ShowPage(key);
                     Expand();

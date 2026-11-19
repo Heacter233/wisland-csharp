@@ -35,6 +35,14 @@ internal sealed class PluginHostContext : IPluginContext, IDisposable
     public string SettingsTitle { get; private set; } = "";
     public string SettingsSubtitle { get; private set; } = "";
 
+    private readonly List<PluginPageDescriptor> _pages = new();
+
+    /// <summary>插件注册的页面（按注册顺序）。</summary>
+    public IReadOnlyList<PluginPageDescriptor> Pages
+    {
+        get { lock (_lock) return _pages.ToArray(); }
+    }
+
     public PluginHostContext(PluginManifest manifest, Dispatcher ui, string hostVersion, string dataRoot)
     {
         Manifest = manifest;
@@ -129,6 +137,27 @@ internal sealed class PluginHostContext : IPluginContext, IDisposable
         SettingsTitle = string.IsNullOrWhiteSpace(title) ? Manifest.Name : title;
         SettingsSubtitle = subtitle ?? "";
         SettingsBuild = build;
+    }
+
+    public void RegisterPage(PluginPageDescriptor page)
+    {
+        if (page == null) return;
+        if (!Ensure(PluginPermissions.UiPage, "注册插件页面")) return;
+        if (string.IsNullOrWhiteSpace(page.Key) || page.Build == null)
+        {
+            Log.Warn("RegisterPage 参数不完整（key 或 build 为空），已忽略");
+            return;
+        }
+
+        lock (_lock)
+        {
+            if (_pages.Exists(p => string.Equals(p.Key, page.Key, StringComparison.OrdinalIgnoreCase)))
+            {
+                Log.Warn($"页面 key 重复：{page.Key}，已忽略");
+                return;
+            }
+            _pages.Add(page);
+        }
     }
 
     public void Dispose()

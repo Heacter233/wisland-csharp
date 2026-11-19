@@ -9,7 +9,8 @@
   "minHostVersion": "0.2.0",
   "permissions": [
     "messages.push",
-    "ui.settings"
+    "ui.settings",
+    "ui.page"
   ],
   "homepage": "https://github.com/Heacter233/wisland-csharp"
 }

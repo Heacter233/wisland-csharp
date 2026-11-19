@@ -25,6 +25,9 @@
 插件放在 `plugins/<id>/`（`plugin.json` + 程序集），宿主启动时校验清单、按插件隔离加载，
 并在设置页展示状态、权限与插件自带的设置面板。
 
+插件可选择性地注册**自己的页面**：图标会出现在主导航下方的独立一行（插件多时横向滚动），
+不注册页面的插件不会占用这一行，其他元素位置保持不变。
+
 - 完整规范（清单字段、权限表、禁止事项、界面写法）：**[docs/plugins.md](docs/plugins.md)**
 - 清单 JSON Schema：`docs/plugin.schema.json`
 - 可运行示例：`samples/hello-plugin`
