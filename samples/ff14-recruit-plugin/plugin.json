@@ -1,0 +1,18 @@
+{
+  "id": "ff14-recruit",
+  "name": "FF14 招募监控",
+  "version": "1.0.0",
+  "author": "wisland",
+  "description": "监控 FF14 招募板关键词，发现新招募时推送到灵动岛消息页（可选提示音）",
+  "entry": "Ff14RecruitPlugin.Ff14RecruitPlugin",
+  "assembly": "Ff14RecruitPlugin.dll",
+  "minHostVersion": "0.2.0",
+  "permissions": [
+    "network",
+    "messages.push",
+    "notify.sound",
+    "ui.settings",
+    "ui.page"
+  ],
+  "homepage": "https://github.com/Heacter233/wisland-csharp"
+}

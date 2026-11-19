@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Ff14RecruitPlugin</AssemblyName>
+    <RootNamespace>Ff14RecruitPlugin</RootNamespace>
+    <OutputType>Library</OutputType>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=false：不要把宿主复制进插件目录，运行时由宿主默认上下文提供契约类型 -->
+    <ProjectReference Include="..\..\WislandCSharp\Wisland.csproj" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 静态数据随插件一起安装到 plugins/ff14-recruit/data/ -->
+    <None Include="data\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

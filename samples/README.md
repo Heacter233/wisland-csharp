@@ -8,6 +8,7 @@
 | [`hello-plugin`](hello-plugin) | 示例插件 | 最小骨架：注册设置面板、注册页面、推送消息、宿主托管定时器 |
 | [`stock-plugin`](stock-plugin) | 股票行情 | 定时拉取网络数据、磁盘缓存、涨跌提醒、自绘走势图（`OnRender`）、列表增删 |
 | [`clash-plugin`](clash-plugin) | Clash 控制 | 只访问本机（`network.local`）、HTTP + 命名管道双通道、分段控件、可点击标签 |
+| [`ff14-recruit-plugin`](ff14-recruit-plugin) | FF14 招募监控 | 关键词轮换轮询、快照差分去重、屏蔽名单/屏蔽词/休息时段、本地静态表（CSV/JSON）、`notify.sound` 提示音权限 |
 | [`mock`](mock) | 测试替身 | 无 Clash 环境下验证 Clash 插件：HTTP mock 与命名管道 mock |
 
 ## 构建与安装
@@ -28,6 +29,28 @@ dotnet build -c Debug
 
 > 目录名必须等于 `plugin.json` 里的 `id`，否则宿主会拒绝加载并给出原因。
 
+**只复制插件需要的东西**：插件自己的 dll + `plugin.json` +（如有）`data/` 与自己的第三方依赖。
+构建输出里出现 `Wisland.exe` / `System.*.dll` / `Microsoft.*.dll` / `WinRT.Runtime.dll` 时**不要**拷进插件目录
+（宿主已有，重复拷贝会让加载器解析到错误副本）。
+
+## FF14 招募监控插件
+
+```bash
+cd samples/ff14-recruit-plugin
+dotnet build -c Debug
+
+# 安装（目录名必须等于 id：ff14-recruit）
+<程序目录>/plugins/ff14-recruit/plugin.json
+<程序目录>/plugins/ff14-recruit/Ff14RecruitPlugin.dll
+<程序目录>/plugins/ff14-recruit/data/*.json,*.csv
+```
+
+- 静态表随插件安装：`data/category_map.json`、`worlds.json`、`ContentFinderCondition.csv`、`duty_override.csv`
+  （后两个原本是 GB2312 编码，已转成 UTF-8；改完可在插件设置里点「重载数据表」即时生效）
+- 运行时数据在 `data/plugins/ff14-recruit/`：`config.json`、`snapshot.json`、`banlist.json`、`hits.json`
+- 迁移自 NapCat 插件 `napcat-plugin-ff14-recruit`（同一作者），招募数据来自 `xivpf.littlenightmare.top` 公开接口
+- 推送的消息**默认静音**：要发声需在 设置页 →「消息提示音」打开总开关 +「插件来源：FF14 招募监控」
+
 ## 验证 Clash 插件（无需真的跑 Clash）
 
 ```bash
@@ -42,11 +65,12 @@ cd samples/mock/PipeMockClash && dotnet run -- verge-mihomo-test
 
 ## 注意
 
-这两个插件是**示例性质的实用工具**，不是精雕细琢的产品：
+这些插件是**示例性质的实用工具**，不是精雕细琢的产品：
 
 - 股票数据来自东方财富公开接口，**仅供参考，不构成投资建议**；接口对高频请求有限流，
   插件已做多域名切换 + 失败冷却 + 磁盘缓存，但长时间高频轮询仍可能被拒。
 - Clash 插件通过外部控制器（`external-controller`）操作，需要客户端开启该功能；
   Clash Verge 默认 `127.0.0.1:9097`，也可能只开命名管道 `\\.\pipe\verge-mihomo`。
-- 两者都遵循同一套约束：不碰宿主窗口/配置、不自建 Window、定时器 ≥100ms、
+- FF14 招募数据来自第三方公开接口，可能存在延迟或缺失；插件对未知副本/服务器会用编号兜底显示。
+- 全部插件遵循同一套约束：不碰宿主窗口/配置、不自建 Window、定时器 ≥100ms、
   改完视觉树调用 `ctx.RequestRepaint()`。
