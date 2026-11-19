@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>StockPlugin</AssemblyName>
+    <RootNamespace>StockPlugin</RootNamespace>
+    <OutputType>Library</OutputType>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=false：不要把宿主复制进插件目录，运行时由宿主默认上下文提供契约类型 -->
+    <ProjectReference Include="..\..\WislandCSharp\Wisland.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>

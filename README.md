@@ -7,7 +7,7 @@
 <img src="docs/expanded.png" width="420">
 </p>
 
-> 当前版本 **v0.1.0**：主体功能已复现，毛玻璃/液态形变等少数模块仍在打磨。
+> 当前版本 **v0.1.0**（Releases 上的构建）；主线已到 **0.2.0**：插件系统、天气城市选择、消息与启动栏增强。
 
 ## 下载
 
@@ -30,7 +30,15 @@
 
 - 完整规范（清单字段、权限表、禁止事项、界面写法）：**[docs/plugins.md](docs/plugins.md)**
 - 清单 JSON Schema：`docs/plugin.schema.json`
-- 可运行示例：`samples/hello-plugin`
+- 示例插件：[`samples/`](samples) —— 三个可运行样板 + Clash 测试替身
+
+| 示例 | 能力 |
+| --- | --- |
+| [`samples/hello-plugin`](samples/hello-plugin) | 最小骨架：设置面板 / 插件页 / 消息推送 / 宿主定时器 |
+| [`samples/stock-plugin`](samples/stock-plugin) | 真实第三方数据：自选股增删、大盘指数、分时与日 K 迷你图、涨跌提醒、多域名切换 + 磁盘缓存 |
+| [`samples/clash-plugin`](samples/clash-plugin) | 本机服务控制：代理模式切换、策略组节点切换，**HTTP 与命名管道双通道**（自动回退） |
+| [`samples/mock`](samples/mock) | 没有 Clash 时用来验证插件：HTTP mock 与命名管道 mock |
+
 ## 关于本项目
 
 - 原项目是贴在屏幕边缘的液态毛玻璃胶囊，悬停弹性展开，功能覆盖媒体控制、天气、控制中心、剪贴板、消息、翻译等。
@@ -50,7 +58,7 @@
 | 小形象 | ✅ | 发光双眼跟随鼠标、多种表情、眨眼 |
 | 播放控制 | ✅ | 走系统 SMTC（WinRT），无 SMTC 时退回媒体键 |
 | 歌词 | ✅ | 网易云公开接口，含译文行 |
-| 天气 | ✅ | Open-Meteo，多城市切换、逐小时 + 5 天预报 |
+| 天气 | ✅ | Open-Meteo，多城市切换（**候选列表可选同名地点 / 支持坐标直填**）、逐小时 + 5 天预报 |
 | 控制中心 | ✅ | 音量（CoreAudio）、亮度（WMI）、WLAN / 蓝牙（Radio API） |
 | 剪贴板 | ✅ | 文本 + 图片缩略图、内容哈希去重、可置顶 / 删除 / 复制 |
 | 消息 | ✅ | 解析 Windows 通知数据库 `wpndatabase.db`（QQ / 微信 / 邮件），不读消息正文 |
@@ -61,9 +69,9 @@
 | 实时字幕 | ⚠️ | 依赖外部 ASR sidecar，C# 侧尚未完全自足 |
 | 液态形变（液桥 / 拉丝 / 贴边内凹圆角） | ❌ | 当前只有弹簧缩放与按压挤压，逐帧几何建模未移植 |
 | Anki 同步 | ❌ | 单词本只存本地，未接入 Anki |
-| 股票行情 | ❌ | 未实现(后续使用插件接口实现) |
-| Clash 代理控制 | ❌ | 未接入 (后续使用插件接口实现)|
-| 插件系统 | ✅ | 清单校验 + 独立 AssemblyLoadContext 加载 + 权限守门 + 设置面板挂载 + 异常隔离；规范见 [docs/plugins.md](docs/plugins.md) |
+| 股票行情 | ✅ | **通过示例插件实现**（`samples/stock-plugin`）：自选股、大盘指数、分时/日K 迷你图、涨跌提醒 |
+| Clash 代理控制 | ✅ | **通过示例插件实现**（`samples/clash-plugin`）：模式切换、策略组节点切换，支持 HTTP 与命名管道 |
+| 插件系统 | ✅ | 清单校验 + 独立 AssemblyLoadContext 加载 + 权限守门 + 设置面板与插件页挂载 + 异常隔离；规范见 [docs/plugins.md](docs/plugins.md) |
 
 ## 新增功能（原版没有）
 
@@ -126,6 +134,29 @@ ServiceHub.Inbox.Push(new PluginMessage {
 按「配置路径 → 运行中进程 → 已知安装路径 → 开始菜单快捷方式 → 卸载注册表 → URI 协议」逐级兜底，
 结果记录在 `data/app-launch.log`。
 
+### 8. 插件系统（清单 / 权限 / 页面）
+
+- **清单校验**：`plugin.json` 的 `id` 必须等于目录名、`minHostVersion` 不满足直接拒绝、
+  权限名拼错也会拒绝加载，失败原因显示在设置页
+- **隔离加载**：每个插件一个可回收 `AssemblyLoadContext`，第三方依赖只在插件目录解析，
+  宿主/系统程序集回落到默认上下文（保证契约类型同一份）
+- **容错**：`OnLoad` 后台执行 + 8 秒超时，抛异常/超时只标记该插件失败，不影响宿主与其他插件
+- **权限守门**：`messages.push` / `ui.settings` / `ui.page` / `ui.compact` / `notify.image`
+  未声明则对应调用被拒绝并记日志
+- **插件页**：可选注册，图标出现在主导航下方一行（多插件横向滚动），无插件时该行不占高度
+- **开发者体验**：宿主托管定时器（卸载自动释放）、插件独立配置与日志、
+  设置页可直接打开插件目录/数据目录、失败原因与日志路径一目了然
+
+### 9. 天气城市选择
+
+同名地点极多（搜「朝阳」有 16 个，含国外同名点），而且地级市在地名库里常以「朝阳市」形式存在。
+所以添加城市不再是"取第一个结果"：
+
+- 自动补「原名 + 市」再合并去重，按**行政级别 + 人口 + 本国**加权排序
+- 多个候选时弹出选择面板：每条显示 **城市 · 省份 · 国家 + 坐标 + 人口**，首条标「推荐」
+- 单候选直接添加；也支持直接输入坐标（`30.66,104.06`，容忍全角符号）
+- 添加后按坐标 0.05° 去重，chip 显示为 `朝阳市 · 辽宁`，一眼可分辨
+
 ## 操作
 
 | 操作 | 效果 |
@@ -160,9 +191,11 @@ ServiceHub.Inbox.Push(new PluginMessage {
 2. **液态形变未移植**：液桥、拉丝、贴边内凹圆角是逐帧几何建模，目前是简化版（弹簧缩放 + 按压挤压）。
 3. **实时字幕**依赖外部 Python ASR sidecar。
 4. **插件为同进程加载**：权限是"声明 + 守门"而非真沙箱，装插件等于信任作者；进程隔离在路线图中。
-5. **收起态提示的自定义动画/图片只承载最新一条**（多条同时到达时，前面的消息只有文字）。
-6. 设置页在极少数 DPI 缩放下卡片可能轻微错位（未复现到稳定案例）。
-7. ⚠️**目前不要使用浅色主题**，目前未做浅色主题底板适配。
+5. **示例插件是示范性质的实用工具**：股票数据来自东方财富公开接口（仅供参考、不构成投资建议，接口有频率限制，
+   插件已做多域名切换 + 失败冷却 + 磁盘缓存）；Clash 插件需要客户端开启外部控制器（或命名管道）。
+6. **收起态提示的自定义动画/图片只承载最新一条**（多条同时到达时，前面的消息只有文字）。
+7. 设置页在极少数 DPI 缩放下卡片可能轻微错位（未复现到稳定案例）。
+8. ⚠️**目前不要使用浅色主题**，目前未做浅色主题底板适配。
 
 ## 构建
 
@@ -191,13 +224,18 @@ dotnet publish WislandCSharp\Wisland.csproj -c Release -r win-x64 --self-contain
 
 ```
 WislandCSharp/
-├─ MainWindow.xaml(.cs)      主窗口：玻璃/窗口几何/展开收起/拖放/热键
+├─ MainWindow.xaml(.cs)      主窗口：玻璃/窗口几何/展开收起/插件页行/拖放/热键
 ├─ Controls/
 │  ├─ IslandChrome.cs        灵动岛本体：绘制、弹簧、贴边、提示绘制
 │  ├─ CompactView.cs         收起态内容（时钟/小形象/音乐）
-│  ├─ Backdrop.cs            抓屏模糊
+│  ├─ Backdrop.cs            抓屏模糊（capture 模式）
 │  └─ ScrollHost.cs          自定义滚动容器
-├─ Pages/                    主页 / 消息 / 翻译 / 剪贴板 / 控制 / 设置
+├─ Plugins/                  插件系统
+│  ├─ PluginManifest.cs      plugin.json 模型与校验
+│  ├─ PluginApi.cs           契约：IWislandPlugin / IPluginContext / 权限常量
+│  ├─ PluginHostContext.cs   单插件上下文（配置、日志、权限守门、托管定时器）
+│  └─ PluginLoader.cs        隔离加载、版本校验、异常隔离、卸载
+├─ Pages/                    主页 / 消息 / 天气 / 翻译 / 剪贴板 / 控制 / 设置
 ├─ Services/
 │  ├─ MessageInbox.cs        插件消息收件箱（Push / 已读 / 置顶）
 │  ├─ AppLauncher.cs         点磁贴打开程序的多级兜底
@@ -206,6 +244,12 @@ WislandCSharp/
 │  ├─ NotifyService.cs       系统通知（wpndatabase.db）
 │  └─ ...
 └─ Theme/                    配色与样式
+
+samples/                     插件范例（见 samples/README.md）
+├─ hello-plugin/             最小骨架
+├─ stock-plugin/             股票行情
+├─ clash-plugin/             Clash 控制（HTTP + 命名管道）
+└─ mock/                     Clash 测试替身
 ```
 
 ## 授权

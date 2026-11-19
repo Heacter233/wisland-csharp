@@ -1,6 +1,6 @@
 # 插件开发规范
 
-> 适用宿主版本：**0.2.0+**　｜　契约命名空间：`Wisland.Plugins`　｜　示例：`samples/hello-plugin`
+> 适用宿主版本：**0.2.0+**　｜　契约命名空间：`Wisland.Plugins`　｜　示例：[`samples/`](../samples)
 
 本文档规定插件**必须声明什么、禁止做什么、可以做什么、界面怎么写**。
 宿主会校验清单、隔离加载、托管资源；不符合规范的插件会被拒绝加载或功能受限。
@@ -379,13 +379,16 @@ clash-1.0.0.zip
 
 ## 12. 示例
 
-完整可运行示例见 [`samples/hello-plugin`](../samples/hello-plugin)：
+全部示例都在 [`samples/`](../samples)（说明见 [`samples/README.md`](../samples/README.md)）：
 
-- `plugin.json` —— 清单与权限声明
-- `HelloPlugin.cs` —— 实现 `IWislandPlugin`、注册设置面板、推送消息、使用宿主定时器
-- `HelloPlugin.csproj` —— `ProjectReference ... Private="false"`（关键：不要把宿主复制进插件目录）
+| 示例 | 演示的能力 |
+| --- | --- |
+| [`hello-plugin`](../samples/hello-plugin) | 最小骨架：清单 / 设置面板 / 插件页 / 消息推送 / 宿主定时器 |
+| [`stock-plugin`](../samples/stock-plugin) | 定时网络拉取、磁盘缓存、涨跌提醒、`OnRender` 自绘走势图、列表增删 |
+| [`clash-plugin`](../samples/clash-plugin) | 只访问本机、**HTTP 与命名管道双通道**、分段控件、可点击标签 |
+| [`mock`](../samples/mock) | 没有 Clash 时验证插件：HTTP mock + 命名管道 mock |
 
-构建并安装：
+以 `hello-plugin` 为例，构建并安装：
 
 ```bash
 cd samples/hello-plugin
@@ -395,11 +398,15 @@ dotnet build -c Debug
 #   plugin.json
 ```
 
+三个工程都用 `ProjectReference ... Private="false"` 引用宿主：
+编译期能拿到契约类型，但**不会**把 `Wisland.exe` 复制进插件目录。
+
 ---
 
 ## 13. 路线图
 
 - [x] 插件可注册导航页（主导航下方一行，横向滚动）
+- [x] 示例插件：股票行情、Clash 控制（含命名管道通道）
 - [ ] 进程隔离（真沙箱，崩溃不影响宿主）
 - [ ] 首次加载时的权限确认弹窗
 - [ ] 插件热重载

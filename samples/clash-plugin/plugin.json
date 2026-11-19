@@ -1,0 +1,16 @@
+{
+  "id": "clash",
+  "name": "Clash 控制",
+  "version": "1.0.0",
+  "author": "wisland",
+  "description": "通过 Clash 外部控制器切换代理模式与节点，查看延迟",
+  "entry": "ClashPlugin.ClashPlugin",
+  "assembly": "ClashPlugin.dll",
+  "minHostVersion": "0.2.0",
+  "permissions": [
+    "network.local",
+    "messages.push",
+    "ui.page",
+    "ui.settings"
+  ]
+}

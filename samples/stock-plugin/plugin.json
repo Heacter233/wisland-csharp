@@ -1,0 +1,16 @@
+{
+  "id": "stock",
+  "name": "股票行情",
+  "version": "1.0.0",
+  "author": "wisland",
+  "description": "自选股实时行情（东方财富公开接口），支持涨跌提醒与页面刷新",
+  "entry": "StockPlugin.StockPlugin",
+  "assembly": "StockPlugin.dll",
+  "minHostVersion": "0.2.0",
+  "permissions": [
+    "network",
+    "messages.push",
+    "ui.page",
+    "ui.settings"
+  ]
+}
