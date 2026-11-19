@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Ff14PricePlugin</AssemblyName>
+    <RootNamespace>Ff14PricePlugin</RootNamespace>
+    <OutputType>Library</OutputType>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=false：契约类型由宿主提供，不要把 Wisland 复制进插件目录 -->
+    <ProjectReference Include="..\..\WislandCSharp\Wisland.csproj" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 物品词典等静态数据随插件安装到 plugins/ff14-price/data/ -->
+    <None Include="data\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

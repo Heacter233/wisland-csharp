@@ -9,6 +9,7 @@
 | [`stock-plugin`](stock-plugin) | 股票行情 | 定时拉取网络数据、磁盘缓存、涨跌提醒、自绘走势图（`OnRender`）、列表增删 |
 | [`clash-plugin`](clash-plugin) | Clash 控制 | 只访问本机（`network.local`）、HTTP + 命名管道双通道、分段控件、可点击标签 |
 | [`ff14-recruit-plugin`](ff14-recruit-plugin) | FF14 招募监控 | 关键词轮换轮询、快照差分去重、屏蔽名单/屏蔽词/休息时段、本地静态表（CSV/JSON）、卡片式结果列表、第二个自定义搜索页、`notify.sound` 提示音权限 |
+| [`ff14-price-plugin`](ff14-price-plugin) | FF14 物品价格 | 离线物品词典（CSV→TSV 生成）、Universalis 市场查询、汇总/明细双 DataGrid、筛选与常用词 |
 | [`mock`](mock) | 测试替身 | 无 Clash 环境下验证 Clash 插件：HTTP mock 与命名管道 mock |
 
 ## 构建与安装
@@ -51,6 +52,21 @@ dotnet build -c Debug
 - 迁移自 NapCat 插件 `napcat-plugin-ff14-recruit`（同一作者），招募数据来自 `xivpf.littlenightmare.top` 公开接口
 - 推送的消息**默认静音**：要发声需在 设置页 →「消息提示音」打开总开关 +「插件来源：FF14 招募监控」
 
+## FF14 物品价格插件
+
+```bash
+cd samples/ff14-price-plugin
+dotnet build -c Debug
+
+# 安装（目录名必须等于 id：ff14-price）
+<程序目录>/plugins/ff14-price/plugin.json
+<程序目录>/plugins/ff14-price/Ff14PricePlugin.dll
+<程序目录>/plugins/ff14-price/data/items.tsv
+```
+
+- 物品词典 `data/items.tsv` 由 ffxiv-datamining-cn 的 `Item.csv` 生成（17,372 条，457KB），随插件安装
+- 价格来自 Universalis v2；同一物品+大区缓存 60 秒，「刷新」强制重查
+- 汇总表（按服务器最低价）/ 明细表（每条挂单）可切换，两张表都支持点表头排序
 ## 验证 Clash 插件（无需真的跑 Clash）
 
 ```bash

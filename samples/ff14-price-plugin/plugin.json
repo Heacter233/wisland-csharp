@@ -1,0 +1,16 @@
+{
+  "id": "ff14-price",
+  "name": "FF14 物品价格",
+  "version": "1.0.0",
+  "author": "Heacter",
+  "description": "查询 FF14 市场布告板价格：物品名→ID 离线词典、汇总/明细双表、常用物品与搜索历史",
+  "entry": "Ff14PricePlugin.Ff14PricePlugin",
+  "assembly": "Ff14PricePlugin.dll",
+  "minHostVersion": "0.2.0",
+  "permissions": [
+    "network",
+    "ui.page",
+    "ui.settings"
+  ],
+  "homepage": "https://github.com/Heacter233/wisland-csharp"
+}
