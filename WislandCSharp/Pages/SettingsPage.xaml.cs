@@ -42,6 +42,13 @@ public partial class SettingsPage : UserControl
     }
 
     // ---------------- 构建 ----------------
+    /// <summary>插件热重载后重建界面（插件分组会随之更新）。</summary>
+    public void Rebuild()
+    {
+        if (!IsLoaded) return;
+        try { Build(); } catch { }
+    }
+
     private void Build()
     {
         SectionStack.Children.Clear();

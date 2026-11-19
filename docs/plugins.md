@@ -201,14 +201,40 @@ ctx.PushMessage(new PluginMessage
 
 1. 宿主启动时扫描 `plugins/*/plugin.json`
 2. 校验清单 → 校验 `minHostVersion` → 检查是否被 `plugins.disabled` 禁用
-3. 每个插件在**独立的可回收 AssemblyLoadContext** 中加载程序集
-4. 反射找到 `entry` 类型 → 校验实现 `IWislandPlugin` → 无参构造
-5. **在后台线程调用 `OnLoad`，超时 8 秒**；超时/抛异常 → 标记加载失败（含原因）
-6. 插件注册的设置分组进入设置页（**延迟构建**，用户打开设置页时才调用 `Build`）
-7. 宿主退出时：`OnUnload` → 释放托管定时器与配置 → `Unload()` 上下文
+3. 清单通过后，把插件目录**复制到影子目录** `data/plugins/.shadow/<id>/<序号>/`，
+   从影子目录加载程序集（源目录不被锁定，见第 7 节热重载）
+4. 每个插件在**独立的可回收 AssemblyLoadContext** 中加载程序集
+5. 反射找到 `entry` 类型 → 校验实现 `IWislandPlugin` → 无参构造
+6. **在后台线程调用 `OnLoad`，超时 8 秒**；超时/抛异常 → 标记加载失败（含原因）
+7. 插件注册的设置分组进入设置页（**延迟构建**，用户打开设置页时才调用 `Build`）
+8. 宿主退出时：`OnUnload` → 释放托管定时器与配置 → `Unload()` 上下文
 
 **因此 `OnLoad` 必须快**（建议 < 200ms）：只做注册与初始化，
 网络请求、文件扫描放到定时器或 `Task.Run` 里，并且**用 `ShutdownToken` 做取消**。
+
+### 5.1 热重载（`plugins.hot_reload`，默认开）
+
+宿主用 `FileSystemWatcher` 监视 `plugins/`（子目录、700ms 防抖），
+一旦发生下列变化就**卸载全部插件并重新扫描**：
+
+- 新增 / 删除插件目录
+- 任意 `plugin.json` 改动
+- 任意 `.dll` / `.pdb` 被覆盖（重新编译后直接复制过去即可）
+
+```bash
+cd samples/stock-plugin
+dotnet build -c Debug
+copy bin\Debug\net8.0-windows10.0.19041.0\StockPlugin.dll <程序目录>\plugins\stock\
+# 不用重启宿主，1 秒内自动重载
+```
+
+重载后宿主会：重建插件页图标行、重建设置页插件分组；若当前正在看的插件页被删除，
+自动退回主页。`data/debug.log`（需 `WISLAND_DEBUG=1`）会记录触发原因与结果。
+
+> 为什么能直接覆盖 DLL：加载走的是影子副本，源目录文件从未被加载器锁定。
+> 即使旧程序集因插件自己的线程未释放而无法真正回收，也只占内存，不影响重载结果。
+
+关闭热重载：`config.json` 里设 `plugins.hot_reload: false`。
 
 ---
 
@@ -357,7 +383,7 @@ clash-1.0.0.zip
 | 设置页显示"加载失败" | 卡片上的「原因」+ `data/plugins/<id>/plugin.log` |
 | 消息推不出来 | 检查是否声明 `messages.push`；`plugin.log` 会有"权限不足"WRN |
 | 设置面板不出现 | 是否声明 `ui.settings`；`Build()` 是否抛异常 |
-| 插件代码改动没生效 | 需要重启宿主（无热重载） |
+| 插件代码改动没生效 | 热重载默认开启，覆盖 dll 后应自动重载；若没反应检查 `plugins.hot_reload`，或看 `data/debug.log` |
 | 加载超时 | `OnLoad` 里有阻塞操作；改到定时器/`Task.Run` |
 
 调试模式：设置环境变量 `WISLAND_DEBUG=1` 后启动宿主，
@@ -407,7 +433,7 @@ dotnet build -c Debug
 
 - [x] 插件可注册导航页（主导航下方一行，横向滚动）
 - [x] 示例插件：股票行情、Clash 控制（含命名管道通道）
+- [x] 热重载（影子副本加载 + 目录监视）
 - [ ] 进程隔离（真沙箱，崩溃不影响宿主）
 - [ ] 首次加载时的权限确认弹窗
-- [ ] 插件热重载
 - [ ] 插件市场 / 索引

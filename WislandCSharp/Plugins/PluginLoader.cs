@@ -83,6 +83,10 @@ public static class PluginLoader
     {
         var root = PluginsRoot(baseDir);
         var dataRoot = PluginDataRoot(dataDir);
+        var shadowRoot = Path.Combine(dataRoot, ".shadow");
+
+        // 上一轮进程遗留的影子目录：尽量清掉（被占用就跳过）
+        PluginShadow.CleanupAll(shadowRoot);
         var disabled = ReadDisabled(config);
         var ui = Dispatcher.CurrentDispatcher;
         var results = new List<PluginLoadResult>();
@@ -154,7 +158,7 @@ public static class PluginLoader
                 continue;
             }
 
-            results.Add(LoadOne(manifest, dataRoot, ui));
+            results.Add(LoadOne(manifest, dataRoot, shadowRoot, ui));
         }
 
         // 注册到设置页
@@ -168,14 +172,38 @@ public static class PluginLoader
         return results;
     }
 
-    private static PluginLoadResult LoadOne(PluginManifest manifest, string dataRoot, Dispatcher ui)
+    /// <summary>
+    /// 卸载全部插件后重新扫描加载（热重载）。
+    /// 因为加载走影子副本，源目录的 dll 从未被锁定，用户可以直接覆盖文件后重载。
+    /// </summary>
+    public static IReadOnlyList<PluginLoadResult> Reload(string baseDir, string dataDir, IConfigService config)
+    {
+        UnloadAll();
+
+        // 帮一把回收：让刚 Unload 的 ALC 尽早释放（不强制，失败也无妨）
+        try
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+        catch { }
+
+        return LoadAll(baseDir, dataDir, config);
+    }
+
+    private static PluginLoadResult LoadOne(PluginManifest manifest, string dataRoot, string shadowRoot, Dispatcher ui)
     {
         PluginLoadContext? alc = null;
         PluginHostContext? ctx = null;
         try
         {
-            var assemblyPath = Path.Combine(manifest.Directory, manifest.Assembly);
-            alc = new PluginLoadContext(manifest.Directory);
+            // 从影子副本加载：源目录不被锁定，才能支持热重载
+            var loadDir = PluginShadow.Prepare(manifest, shadowRoot, out var shadowError);
+            if (loadDir == null) return Fail(manifest, null, shadowError);
+
+            var assemblyPath = Path.Combine(loadDir, manifest.Assembly);
+            alc = new PluginLoadContext(loadDir);
             var asm = alc.LoadFromAssemblyPath(assemblyPath);
 
             var type = asm.GetType(manifest.Entry, throwOnError: false);
@@ -242,7 +270,7 @@ public static class PluginLoader
         }
     }
 
-    private static PluginLoadResult Fail(PluginManifest manifest, PluginLoadContext alc, string error) => new()
+    private static PluginLoadResult Fail(PluginManifest manifest, PluginLoadContext? alc, string error) => new()
     {
         Manifest = manifest,
         Directory = manifest.Directory,

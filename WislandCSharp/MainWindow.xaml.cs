@@ -89,6 +89,8 @@ public partial class MainWindow : Window
     private ContentControl _pageHost = null!;
     private Border _pluginBar = null!;
     private StackPanel _pluginRow = null!;
+    private Plugins.PluginWatcher? _pluginWatcher;
+    private bool _pluginReloading;
 
     /// <summary>插件页：key → (视图, 内容高度, 图标按钮)。</summary>
     private readonly Dictionary<string, (FrameworkElement View, double Height, Button Btn)> _pluginPages = new();
@@ -384,6 +386,84 @@ public partial class MainWindow : Window
             }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
         ServiceHub.Config.Set("island.last_tab", key, save: false);
+    }
+
+    /// <summary>加载全部插件并安装页面/设置分组（启动与热重载共用）。</summary>
+    private void LoadPluginsAndInstall()
+    {
+        var results = Plugins.PluginLoader.LoadAll(
+            AppContext.BaseDirectory,
+            ServiceHub.Config.DataDir,
+            ServiceHub.Config);
+
+        foreach (var r in results)
+        {
+            if (r.State == Plugins.PluginState.Failed)
+                App.LogCrash($"plugin [{r.Manifest?.Id ?? System.IO.Path.GetFileName(r.Directory)}]", new Exception(r.Error));
+        }
+
+        // 插件页：主导航下方单独一行（无页面时该行不占高度）
+        InstallPluginPages(results);
+
+        App.DebugNote($"plugins: {results.Count} 个目录，成功 {results.Count(x => x.State == Plugins.PluginState.Loaded)}");
+    }
+
+    /// <summary>
+    /// 热重载：卸载全部插件后重新扫描加载，并同步界面。
+    ///
+    /// 因为加载走影子副本（data/plugins/.shadow），源目录的文件一直没被锁定，
+    /// 所以用户可以直接覆盖 DLL 再触发重载。
+    /// </summary>
+    private void ReloadPlugins()
+    {
+        if (_pluginReloading) return;
+        _pluginReloading = true;
+
+        var currentWasPlugin = IsPluginPage(_currentPage);
+        var currentKey = _currentPage;
+        try
+        {
+            App.DebugNote($"plugins: 热重载开始（{_pluginWatcher?.LastReason}）");
+
+            var results = Plugins.PluginLoader.Reload(
+                AppContext.BaseDirectory,
+                ServiceHub.Config.DataDir,
+                ServiceHub.Config);
+
+            foreach (var r in results)
+            {
+                if (r.State == Plugins.PluginState.Failed)
+                    App.LogCrash($"plugin reload [{r.Manifest?.Id ?? System.IO.Path.GetFileName(r.Directory)}]",
+                        new Exception(r.Error));
+            }
+
+            InstallPluginPages(results);
+
+            // 当前页是被卸载/改名的插件页 → 退回主页，避免停在空白页
+            if (currentWasPlugin && !_pluginPages.ContainsKey(currentKey))
+            {
+                ShowPage("home", force: true);
+            }
+            else if (_pluginPages.ContainsKey(currentKey))
+            {
+                // 仍在，但视图是新构建的实例，需要重新挂到页面上
+                ShowPage(currentKey, force: true);
+            }
+
+            // 设置页在显示中则重建（插件分组、状态、权限都会变）
+            if (_pages.TryGetValue("set", out var sp) && sp is Pages.SettingsPage setPage)
+                setPage.Rebuild();
+
+            App.DebugNote($"plugins: 热重载完成，成功 {results.Count(x => x.State == Plugins.PluginState.Loaded)}");
+        }
+        catch (Exception ex)
+        {
+            App.LogCrash("plugin reload", ex);
+        }
+        finally
+        {
+            _pluginReloading = false;
+        }
     }
 
     /// <summary>
@@ -833,21 +913,20 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var results = Plugins.PluginLoader.LoadAll(
-                AppContext.BaseDirectory,
-                ServiceHub.Config.DataDir,
-                ServiceHub.Config);
+            LoadPluginsAndInstall();
 
-            foreach (var r in results)
+            // 热重载：plugins/ 下的 dll / plugin.json 变化后自动重载
+            if (ServiceHub.Config.Get("plugins.hot_reload", true))
             {
-                if (r.State == Plugins.PluginState.Failed)
-                    App.LogCrash($"plugin [{r.Manifest?.Id ?? System.IO.Path.GetFileName(r.Directory)}]", new Exception(r.Error));
+                Try("plugin-watcher", () =>
+                {
+                    _pluginWatcher = new Plugins.PluginWatcher(
+                        Plugins.PluginLoader.PluginsRoot(AppContext.BaseDirectory),
+                        () => ReloadPlugins(),
+                        Dispatcher);
+                    App.DebugNote("plugins: 热重载已启用（监视 plugins/）");
+                });
             }
-
-            // 插件页：主导航下方单独一行（无页面时该行不占高度）
-            InstallPluginPages(results);
-
-            App.DebugNote($"plugins: {results.Count} 个目录，成功 {results.Count(x => x.State == Plugins.PluginState.Loaded)}");
         });
 
         Try("debugpage", () =>

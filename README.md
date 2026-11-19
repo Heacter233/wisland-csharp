@@ -144,6 +144,9 @@ ServiceHub.Inbox.Push(new PluginMessage {
 - **权限守门**：`messages.push` / `ui.settings` / `ui.page` / `ui.compact` / `notify.image`
   未声明则对应调用被拒绝并记日志
 - **插件页**：可选注册，图标出现在主导航下方一行（多插件横向滚动），无插件时该行不占高度
+- **热重载**：`plugins.hot_reload`（默认开）。`plugins/` 下的 dll / `plugin.json` 变化后
+  自动卸载重载（700ms 防抖），插件页与设置分组同步更新；当前页被删则自动退回主页。
+  加载走**影子副本**（`data/plugins/.shadow`），源目录文件不被锁定，重新编译后直接覆盖即可
 - **开发者体验**：宿主托管定时器（卸载自动释放）、插件独立配置与日志、
   设置页可直接打开插件目录/数据目录、失败原因与日志路径一目了然
 
@@ -181,6 +184,9 @@ ServiceHub.Inbox.Push(new PluginMessage {
 | `island.notify_to_inbox` | 系统通知是否并入消息页 |
 | `island.notify_plugin_anim` | 是否允许插件自定义通知动画 |
 | `island.msg_pinned` | 消息磁贴置顶的来源（逗号分隔） |
+| `plugins.enabled` | 是否加载插件（默认 `true`） |
+| `plugins.hot_reload` | `plugins/` 变化时自动重载（默认 `true`） |
+| `plugins.disabled` | 要禁用的插件 id 列表 |
 | `notify.open.qq` / `wechat` / `mail` | 点磁贴打开的 exe；留空自动探测并回写 |
 
 ## 已知问题
