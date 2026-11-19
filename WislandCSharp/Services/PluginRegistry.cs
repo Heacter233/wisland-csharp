@@ -132,15 +132,15 @@ public static class PendingFeatures
         },
         new Item
         {
-            Title = "Clash 集成",
-            State = "待插件",
-            Note = "可由插件通过 network.local + messages.push 接入外部控制器 API",
+            Title = "插件进程隔离",
+            State = "待实现",
+            Note = "当前插件与宿主同进程加载，权限为声明+守门而非真沙箱；隔离后崩溃不影响宿主",
         },
         new Item
         {
-            Title = "股票行情",
-            State = "待插件",
-            Note = "可由插件通过 network + messages.push 实现",
+            Title = "Anki 同步",
+            State = "待实现",
+            Note = "单词本只存本地；可通过插件接入（需要网络与文件权限）",
         },
     };
 }

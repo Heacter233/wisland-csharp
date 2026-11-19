@@ -95,71 +95,7 @@ public static class PluginLoader
         Directory.CreateDirectory(dataRoot);
 
         foreach (var dir in SafeGetDirectories(root))
-        {
-            var manifestPath = Path.Combine(dir, "plugin.json");
-            var folder = Path.GetFileName(dir);
-
-            if (!File.Exists(manifestPath))
-            {
-                results.Add(new PluginLoadResult
-                {
-                    Directory = dir,
-                    State = PluginState.Failed,
-                    Error = "目录下没有 plugin.json，已忽略",
-                });
-                continue;
-            }
-
-            var manifest = PluginManifest.TryLoad(manifestPath, out var error);
-            if (manifest == null)
-            {
-                results.Add(new PluginLoadResult
-                {
-                    Directory = dir,
-                    State = PluginState.Failed,
-                    Error = error,
-                });
-                continue;
-            }
-
-            if (!string.Equals(folder, manifest.Id, StringComparison.OrdinalIgnoreCase))
-            {
-                results.Add(new PluginLoadResult
-                {
-                    Manifest = manifest,
-                    Directory = dir,
-                    State = PluginState.Failed,
-                    Error = $"目录名 \"{folder}\" 与 id \"{manifest.Id}\" 不一致（必须以 id 命名目录）",
-                });
-                continue;
-            }
-
-            if (disabled.Contains(manifest.Id))
-            {
-                results.Add(new PluginLoadResult
-                {
-                    Manifest = manifest,
-                    Directory = dir,
-                    State = PluginState.Disabled,
-                    Error = "已在设置中禁用",
-                });
-                continue;
-            }
-
-            if (!VersionOk(manifest.MinHostVersion))
-            {
-                results.Add(new PluginLoadResult
-                {
-                    Manifest = manifest,
-                    Directory = dir,
-                    State = PluginState.Failed,
-                    Error = $"需要宿主 ≥ {manifest.MinHostVersion}，当前 {HostVersion}",
-                });
-                continue;
-            }
-
-            results.Add(LoadOne(manifest, dataRoot, shadowRoot, ui));
-        }
+            results.Add(LoadDirectory(dir, disabled, ui, dataRoot, shadowRoot));
 
         // 注册到设置页
         foreach (var r in results) RegisterToRegistry(r);
@@ -170,6 +106,127 @@ public static class PluginLoader
             _loaded.AddRange(results);
         }
         return results;
+    }
+
+    /// <summary>
+    /// 只重载指定的一个插件（其它插件保持运行）。
+    /// 用于设置页每个插件卡片上的「重载」按钮。
+    ///
+    /// 会先卸载该插件、清掉它的注册表条目，再重新扫描/加载它自己的目录。
+    /// 目录被删掉时返回 null（调用方据此重建页面列表即可）。
+    /// </summary>
+    public static PluginLoadResult? ReloadOne(string id, string baseDir, string dataDir, IConfigService config)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+
+        var root = PluginsRoot(baseDir);
+        var dataRoot = PluginDataRoot(dataDir);
+        var shadowRoot = Path.Combine(dataRoot, ".shadow");
+        var ui = Dispatcher.CurrentDispatcher;
+
+        PluginLoadResult? old = null;
+        lock (_lock)
+        {
+            old = _loaded.Find(r =>
+                string.Equals(r.Manifest?.Id ?? Path.GetFileName(r.Directory), id, StringComparison.OrdinalIgnoreCase));
+            if (old != null) _loaded.Remove(old);
+        }
+
+        // 卸载旧实例（OnUnload → 释放上下文 → ALC.Unload）
+        UnloadOne(old);
+
+        // 注册表里也要清掉，等重新加载后重新登记
+        PluginRegistry.Unregister(id);
+
+        var dir = old?.Directory ?? Path.Combine(root, id);
+        if (!Directory.Exists(dir))
+        {
+            AppDebug($"插件目录已不存在，视为移除：{dir}");
+            return null;
+        }
+
+        var result = LoadDirectory(dir, ReadDisabled(config), ui, dataRoot, shadowRoot);
+
+        lock (_lock) _loaded.Add(result);
+        RegisterToRegistry(result);
+        return result;
+    }
+
+    private static void UnloadOne(PluginLoadResult? r)
+    {
+        if (r == null) return;
+        try { r.Instance?.OnUnload(); } catch { }
+        try { r.Context?.Dispose(); } catch { }
+        try { r.LoadContext?.Unload(); } catch { }
+    }
+
+    /// <summary>按 id 查已加载结果。</summary>
+    public static PluginLoadResult? Find(string id)
+    {
+        lock (_lock)
+        {
+            return _loaded.Find(r =>
+                string.Equals(r.Manifest?.Id ?? Path.GetFileName(r.Directory), id, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    private static void AppDebug(string note)
+    {
+        try { Wisland.App.DebugNote(note); } catch { }
+    }
+
+    /// <summary>加载一个插件目录（含清单校验）。失败时返回 Failed 结果而不是抛异常。</summary>
+    private static PluginLoadResult LoadDirectory(
+        string dir, HashSet<string> disabled, Dispatcher ui, string dataRoot, string shadowRoot)
+    {
+        var manifestPath = Path.Combine(dir, "plugin.json");
+        var folder = Path.GetFileName(dir);
+
+        if (!File.Exists(manifestPath))
+            return new PluginLoadResult
+            {
+                Directory = dir,
+                State = PluginState.Failed,
+                Error = "目录下没有 plugin.json，已忽略",
+            };
+
+        var manifest = PluginManifest.TryLoad(manifestPath, out var error);
+        if (manifest == null)
+            return new PluginLoadResult
+            {
+                Directory = dir,
+                State = PluginState.Failed,
+                Error = error,
+            };
+
+        if (!string.Equals(folder, manifest.Id, StringComparison.OrdinalIgnoreCase))
+            return new PluginLoadResult
+            {
+                Manifest = manifest,
+                Directory = dir,
+                State = PluginState.Failed,
+                Error = $"目录名 \"{folder}\" 与 id \"{manifest.Id}\" 不一致（必须以 id 命名目录）",
+            };
+
+        if (disabled.Contains(manifest.Id))
+            return new PluginLoadResult
+            {
+                Manifest = manifest,
+                Directory = dir,
+                State = PluginState.Disabled,
+                Error = "已在设置中禁用",
+            };
+
+        if (!VersionOk(manifest.MinHostVersion))
+            return new PluginLoadResult
+            {
+                Manifest = manifest,
+                Directory = dir,
+                State = PluginState.Failed,
+                Error = $"需要宿主 ≥ {manifest.MinHostVersion}，当前 {HostVersion}",
+            };
+
+        return LoadOne(manifest, dataRoot, shadowRoot, ui);
     }
 
     /// <summary>

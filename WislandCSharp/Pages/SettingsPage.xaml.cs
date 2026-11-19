@@ -175,9 +175,11 @@ public partial class SettingsPage : UserControl
         AddCard(pluginSec, dirCard);
 
         // 每个插件一张卡：名字/版本/状态/权限/错误/设置入口
-        foreach (var pl in plugins)
+        // 卡片之间插一条分隔线，避免两个插件的说明与权限贴在一起难以分辨
+        for (var i = 0; i < plugins.Count; i++)
         {
-            AddCard(pluginSec, BuildPluginCard(pl));
+            if (i > 0) AddCard(pluginSec, PluginSeparator());
+            AddCard(pluginSec, BuildPluginCard(plugins[i]));
         }
 
         // ===== 扩展与实验（诚实标注未实现项） =====
@@ -198,8 +200,8 @@ public partial class SettingsPage : UserControl
         sp.Children.Add(new TextBlock
         {
             Text = total == 0
-                ? "把插件解压到程序目录下的 plugins\\<id>\\（内含 plugin.json），重启后生效。"
-                : "插件从 plugins\\<id>\\ 加载；修改后需重启宿主。开发规范见 docs/plugins.md。",
+                ? "把插件解压到程序目录下的 plugins\\<id>\\（内含 plugin.json），会**自动加载**，也可用下面按钮手动重载。"
+                : "插件从 plugins\\<id>\\ 加载；改动 dll / plugin.json 会自动重载，也可用下面按钮手动重载。开发规范见 docs/plugins.md。",
             Style = (Style)FindResource("T3"),
             TextWrapping = TextWrapping.Wrap,
         });
@@ -247,10 +249,47 @@ public partial class SettingsPage : UserControl
             catch { }
         };
         row.Children.Add(openData);
+
+        // 重载全部插件：卸载后重新扫描 plugins/（新增/移除/改动都会生效）
+        var reloadAll = new Button
+        {
+            Content = "重新加载全部插件",
+            Style = (Style)FindResource("PillBtn"),
+            Height = 26,
+            FontSize = 12,
+            Margin = new Thickness(8, 0, 0, 0),
+        };
+        reloadAll.Click += (_, _) =>
+        {
+            reloadAll.IsEnabled = false;
+            reloadAll.Content = "重载中…";
+            try
+            {
+                ServiceHub.RequestReloadPlugins?.Invoke(null);
+            }
+            finally
+            {
+                // 重载会重建整个设置页，这个按钮随之被替换，这里只是兜底恢复
+                reloadAll.IsEnabled = true;
+                reloadAll.Content = "重新加载全部插件";
+            }
+        };
+        row.Children.Add(reloadAll);
+
         sp.Children.Add(row);
 
         return new Border { Style = (Style)FindResource("Card"), Width = 590, Child = sp };
     }
+
+    /// <summary>插件卡片之间的分隔线（两个插件的说明/权限贴在一起时不好读）。</summary>
+    private Border PluginSeparator() => new()
+    {
+        Height = 1,
+        Width = 560,
+        Margin = new Thickness(0, 2, 0, 12),
+        HorizontalAlignment = HorizontalAlignment.Left,
+        Background = new SolidColorBrush(Color.FromArgb(34, 255, 255, 255)),
+    };
 
     /// <summary>单个插件卡片：名称/版本/状态/权限/错误 + 设置入口。</summary>
     private Border BuildPluginCard(PluginInfo pl)
@@ -302,13 +341,62 @@ public partial class SettingsPage : UserControl
 
         if (!string.IsNullOrWhiteSpace(pl.Description))
         {
-            sp.Children.Add(new TextBlock
+            // 说明 + 该插件的「重载」按钮（单独重载这一个，不影响其他插件）
+            var descRow = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+            descRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            descRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var desc = new TextBlock
             {
                 Text = pl.Description,
                 Style = (Style)FindResource("T3"),
                 TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 10, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Grid.SetColumn(desc, 0);
+            descRow.Children.Add(desc);
+
+            var reload = new Button
+            {
+                Content = "重载",
+                Height = 22,
+                Padding = new Thickness(10, 0, 10, 0),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "只重新加载这个插件",
+            };
+            reload.SetResourceReference(FrameworkElement.StyleProperty, "PillBtn");
+            var id = pl.Id;
+            reload.Click += (_, _) =>
+            {
+                reload.IsEnabled = false;
+                reload.Content = "…";
+                try { ServiceHub.RequestReloadPlugins?.Invoke(id); }
+                finally { reload.IsEnabled = true; reload.Content = "重载"; }
+            };
+            Grid.SetColumn(reload, 1);
+            descRow.Children.Add(reload);
+
+            sp.Children.Add(descRow);
+        }
+        else
+        {
+            // 没有说明也给出重载入口，避免只能整页重载
+            var reload = new Button
+            {
+                Content = "重载",
+                Height = 22,
                 Margin = new Thickness(0, 6, 0, 0),
-            });
+                Padding = new Thickness(10, 0, 10, 0),
+                FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                ToolTip = "只重新加载这个插件",
+            };
+            reload.SetResourceReference(FrameworkElement.StyleProperty, "PillBtn");
+            var id0 = pl.Id;
+            reload.Click += (_, _) => ServiceHub.RequestReloadPlugins?.Invoke(id0);
+            sp.Children.Add(reload);
         }
 
         if (!string.IsNullOrWhiteSpace(pl.Author))

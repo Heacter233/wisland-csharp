@@ -467,6 +467,50 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 只重载一个插件（其它插件继续运行）。
+    /// 目录被删时该插件从列表消失，当前页若属于它会退回主页。
+    /// </summary>
+    private void ReloadPlugin(string id)
+    {
+        if (_pluginReloading) return;
+        _pluginReloading = true;
+
+        var currentKey = _currentPage;
+        var currentWasPlugin = IsPluginPage(currentKey);
+        try
+        {
+            App.DebugNote($"plugins: 单独重载 {id}");
+
+            var result = Plugins.PluginLoader.ReloadOne(
+                id, AppContext.BaseDirectory, ServiceHub.Config.DataDir, ServiceHub.Config);
+
+            if (result != null && result.State == Plugins.PluginState.Failed)
+                App.LogCrash($"plugin reload [{id}]", new Exception(result.Error));
+
+            // 页面行按最新的加载结果整体重建（新增/移除/改名都能反映）
+            InstallPluginPages(Plugins.PluginLoader.Loaded);
+
+            if (currentWasPlugin && !_pluginPages.ContainsKey(currentKey))
+                ShowPage("home", force: true);
+            else if (_pluginPages.ContainsKey(currentKey))
+                ShowPage(currentKey, force: true);
+
+            if (_pages.TryGetValue("set", out var sp) && sp is Pages.SettingsPage setPage)
+                setPage.Rebuild();
+
+            App.DebugNote($"plugins: 单独重载完成 {id}（{result?.State.ToString() ?? "已移除"}）");
+        }
+        catch (Exception ex)
+        {
+            App.LogCrash($"plugin reload [{id}]", ex);
+        }
+        finally
+        {
+            _pluginReloading = false;
+        }
+    }
+
+    /// <summary>
     /// 安装插件页面：在主导航下方生成一行图标按钮。
     /// 没有插件页面时整行保持 Collapsed（高度 0），不影响其他元素位置。
     /// </summary>
@@ -901,6 +945,13 @@ public partial class MainWindow : Window
                 _pageHost.InvalidateVisual();
                 ServiceHub.RequestRetargetHeight?.Invoke();
                 _chrome.InvalidateVisual();
+            };
+
+            // 设置页按钮：重载全部 / 重载单个插件
+            ServiceHub.RequestReloadPlugins = id =>
+            {
+                if (string.IsNullOrWhiteSpace(id)) ReloadPlugins();
+                else ReloadPlugin(id);
             };
         });
 

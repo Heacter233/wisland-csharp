@@ -78,6 +78,12 @@ public static class ServiceHub
     /// <summary>请求重绘当前页面（插件修改了页面视觉树后调用）。</summary>
     public static Action? RequestRepaint { get; set; }
 
+    /// <summary>
+    /// 请求重载插件：参数为 null/空表示重载全部，否则只重载该 id。
+    /// 由 MainWindow 实现（卸载/加载 + 重建插件页与设置分组）。
+    /// </summary>
+    public static Action<string?>? RequestReloadPlugins { get; set; }
+
     /// <summary>请求重新应用主题。</summary>
     public static Action? RequestThemeRefresh { get; set; }
 
