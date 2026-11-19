@@ -101,6 +101,8 @@ internal sealed class PluginHostContext : IPluginContext, IDisposable
 
     public void RequestRetargetHeight() => ServiceHub.RequestRetargetHeight?.Invoke();
 
+    public void RequestRepaint() => ServiceHub.RequestRepaint?.Invoke();
+
     public IDisposable RegisterTimer(TimeSpan interval, Action tick, bool runOnUi = true)
     {
         if (tick == null) return new NoopDisposable();

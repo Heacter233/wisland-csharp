@@ -148,6 +148,13 @@ public interface IPluginContext
     void RequestRetargetHeight();
 
     /// <summary>
+    /// 请求重绘当前页面。
+    /// 插件直接改页面视觉树（换文字、增删子元素）后**必须**调用，
+    /// 否则宿主空闲时不会重绘，改动要等下次动画才可见。
+    /// </summary>
+    void RequestRepaint();
+
+    /// <summary>
     /// 注册一个宿主托管的定时器（卸载时自动释放）。
     /// 最小间隔 100ms；<paramref name="runOnUi"/> 为 true 时回调在 UI 线程。
     /// </summary>

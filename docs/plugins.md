@@ -130,9 +130,10 @@ public interface IPluginContext
     bool Has(string permission);
 
     void PushMessage(PluginMessage message);      // 需 messages.push
-    void RequestExpand(string pageKey = "");      // 展开到指定页（home/msg/weather/ctl/clip/trans/set）
+    void RequestExpand(string pageKey = "");      // 展开到指定页（home/msg/weather/ctl/clip/trans/set 或插件页 key）
     void RequestCollapse();
     void RequestRetargetHeight();                 // 页面高度变了，让宿主重算
+    void RequestRepaint();                        // 改了视觉树后必须调用，否则不重绘
 
     IDisposable RegisterTimer(TimeSpan interval, Action tick, bool runOnUi = true);
     void RegisterSettingsSection(string title, string subtitle, Func<FrameworkElement> build);
@@ -294,6 +295,7 @@ context.RegisterPage(new PluginPageDescriptor
 | 自建滚动 | 用宿主的 `ScrollHost` 或普通 `ScrollViewer`（注意别套两层抢滚轮） |
 | 焦点 | 不要把键盘焦点抢到页面外；需要输入时用 `AppBox` 样式 |
 | 异常 | `Build()` 抛异常会被宿主捕获并显示错误占位，**但请自己 try/catch 并记日志** |
+| 重绘 | **直接改视觉树（换文字/增删子元素）后必须调用 `ctx.RequestRepaint()`** —— 宿主空闲时不会自动重绘，否则改动要等下次动画才出现 |
 | 生命周期 | 页面可能被反复切走/切回；`Build()` 只调用一次，返回的元素会被复用 |
 
 > 多插件时图标行最多显示约 15 个（30px 宽 + 间距），超出横向滚动；

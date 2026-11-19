@@ -516,7 +516,24 @@ public partial class MainWindow : Window
             Height = height;
         }
 
-        public FrameworkElement Real => _child ??= _factory();
+        /// <summary>
+        /// 真实内容。首次访问时构建并**注册进可视树** ——
+        /// 不调用 AddVisualChild 的话，子树的失效不会传播到渲染根，
+        /// 表现为"插件改了界面但不刷新"。
+        /// </summary>
+        public FrameworkElement Real
+        {
+            get
+            {
+                if (_child == null)
+                {
+                    _child = _factory();
+                    AddVisualChild(_child);
+                    AddLogicalChild(_child);
+                }
+                return _child;
+            }
+        }
 
         protected override Size MeasureOverride(Size availableSize)
         {
@@ -532,7 +549,7 @@ public partial class MainWindow : Window
             return finalSize;
         }
 
-        protected override int VisualChildrenCount => Real != null ? 1 : 0;
+        protected override int VisualChildrenCount => _child != null ? 1 : 0;
 
         protected override Visual GetVisualChild(int index) => Real;
     }
@@ -776,6 +793,14 @@ public partial class MainWindow : Window
             {
                 if (_chrome.IsExpanded) _chrome.RetargetExpandedHeight(CurrentPageHeight() + 66);
                 else _chrome.RetargetCompact();
+            };
+
+            // 插件改了页面视觉树后要主动重绘（宿主空闲时不会自己刷新）
+            ServiceHub.RequestRepaint = () =>
+            {
+                _pageHost.InvalidateVisual();
+                ServiceHub.RequestRetargetHeight?.Invoke();
+                _chrome.InvalidateVisual();
             };
         });
 

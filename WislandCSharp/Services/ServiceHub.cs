@@ -75,6 +75,9 @@ public static class ServiceHub
     public static Action<string>? PushUiLock { get; set; }
     public static Action<string>? PopUiLock { get; set; }
 
+    /// <summary>请求重绘当前页面（插件修改了页面视觉树后调用）。</summary>
+    public static Action? RequestRepaint { get; set; }
+
     /// <summary>请求重新应用主题。</summary>
     public static Action? RequestThemeRefresh { get; set; }
 
