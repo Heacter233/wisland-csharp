@@ -44,6 +44,9 @@ public static class ServiceHub
 
     /// <summary>插件/外部程序推送文本消息的收件箱（消息页会合并显示）。</summary>
     public static MessageInbox Inbox { get; set; } = new();
+
+    /// <summary>消息提示音（默认关闭；按来源单独开启，插件需声明 notify.sound）。</summary>
+    public static NotifySoundService NotifySound { get; set; } = new();
     public static RadioService Radio { get; set; } = null!;
     public static WordbookService Wordbook { get; set; } = null!;
 

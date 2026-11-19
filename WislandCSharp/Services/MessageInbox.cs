@@ -103,7 +103,12 @@ public sealed class MessageInbox
             if (_items.Count > Math.Max(1, Capacity))
                 _items.RemoveRange(Capacity, _items.Count - Capacity);
         }
-        if (notify) Changed?.Invoke(this, EventArgs.Empty);
+        if (notify)
+        {
+            // 提示音：是否真正播放由 NotifySoundService 按开关/权限/冷却决定
+            try { ServiceHub.NotifySound.OnMessage(message.Source); } catch { }
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     /// <summary>删除某一条。</summary>

@@ -46,13 +46,19 @@ public static class PluginPermissions
     /// <summary>通知使用自定义图片（NotifyImage）。</summary>
     public const string NotifyImage = "notify.image";
 
+    /// <summary>
+    /// 消息到达时播放提示音（还需要用户在设置页为该来源单独开启）。
+    /// 未声明时，即使总开关打开也不会为该插件的消息播放声音。
+    /// </summary>
+    public const string NotifySound = "notify.sound";
+
     /// <summary>读取系统信息（CPU/内存/电池等）。</summary>
     public const string SystemInfo = "system.info";
 
     public static readonly IReadOnlyList<string> All = new[]
     {
         MessagesPush, SettingsPanel, CompactDraw, UiPage, Network, NetworkLocal,
-        ProcessStart, ClipboardRead, FilesUser, NotifyImage, SystemInfo,
+        ProcessStart, ClipboardRead, FilesUser, NotifyImage, SystemInfo, NotifySound,
     };
 
     public static bool IsKnown(string permission) =>

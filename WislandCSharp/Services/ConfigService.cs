@@ -65,6 +65,21 @@ public class ConfigService : IConfigService
             ["model"] = "deepseek-flash", ["import_from"] = "",
         },
         ["clipboard"] = new Dictionary<string, object?> { ["max"] = 10 },
+        ["notify"] = new Dictionary<string, object?>
+        {
+            ["sound"] = new Dictionary<string, object?>
+            {
+                // 默认关闭：内置来源（QQ/微信/邮件）与插件来源都各自有开关
+                ["enabled"] = false,
+                ["kind"] = "asterisk",
+                ["file"] = "",
+                ["cooldown_ms"] = 3000,
+                ["source"] = new Dictionary<string, object?>
+                {
+                    ["qq"] = false, ["wechat"] = false, ["mail"] = false,
+                },
+            },
+        },
         ["live"] = new Dictionary<string, object?>
         {
             ["models_dir"] = "models",

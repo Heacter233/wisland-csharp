@@ -90,6 +90,7 @@
 | `ui.page` | `ctx.RegisterPage(...)` 注册插件页面 | 页面不出现（图标行也不会显示） |
 | `ui.compact` | 通知里用 `NotifyDraw` 在收起态自绘 | 自绘被剥离，只显示文字 |
 | `notify.image` | 通知里用 `NotifyImage` 显示图片 | 图片被剥离 |
+| `notify.sound` | 该插件来源的消息在用户开启后可以播放提示音 | 即使总开关打开，该来源也不会发声（宿主记 WRN） |
 | `network` | 访问外网（http/https） | 声明性质，宿主不做拦截 |
 | `network.local` | 只访问 `127.0.0.1` / `localhost`（如 Clash 外部控制器） | 声明性质，粒度更小、更易被用户接受 |
 | `process.start` | 启动进程 / 打开文件/链接 | 声明性质 |
@@ -194,6 +195,15 @@ ctx.PushMessage(new PluginMessage
 ```
 
 `PushMessage` 线程安全，可在任意线程调用。
+
+**提示音**：声音由宿主统一控制，插件不能自己放声音。要让自己推送的消息可能发声：
+
+1. 清单里声明 `notify.sound`；
+2. `PluginMessage.Source` **必须等于插件 id**（宿主按 id 查这份声明）；
+3. 由**用户在设置页 →「消息提示音」**里打开「插件来源：你的插件名」这一路开关，并打开总开关。
+
+默认全部关闭；未声明 `notify.sound` 的插件即使开关被打开也不会响。
+声音类型（系统提示音 / 自定义 wav）与冷却时间同样由用户在设置页配置。
 
 ---
 

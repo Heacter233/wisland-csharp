@@ -119,6 +119,39 @@ public partial class SettingsPage : UserControl
         AddCard(basic, CardSlider("自动收起延时", "island.collapse_delay_ms", 200, 1500, 50,
             cfg.Get("island.collapse_delay_ms", 450), v => $"{v} 毫秒"));
 
+        // ===== 消息提示音 =====
+        var snd = AddSection("消息提示音", "默认关闭；内置 QQ / 微信 / 邮件与插件来源各自独立开关");
+
+        AddCard(snd, CardToggle("开启消息提示音", "notify.sound.enabled",
+            cfg.Get("notify.sound.enabled", false),
+            "总开关。关闭时任何来源都不会发声"));
+
+        AddCard(snd, CardChoice("提示音类型", "notify.sound.kind",
+            new[] { "asterisk", "beep", "exclamation", "question", "hand" },
+            new[] { "系统默认", "蜂鸣", "感叹", "疑问", "警告" },
+            cfg.Get("notify.sound.kind", "asterisk")));
+
+        AddCard(snd, CardText("自定义提示音（.wav）", "notify.sound.file",
+            cfg.Get("notify.sound.file", ""),
+            "留空使用系统提示音；填绝对路径则播放该 wav"));
+
+        AddCard(snd, CardSlider("提示音冷却", "notify.sound.cooldown_ms", 500, 15000, 500,
+            cfg.Get("notify.sound.cooldown_ms", 3000), v => $"{v / 1000.0:0.0} 秒"));
+
+        AddCard(snd, BuildSoundPreviewCard());
+
+        // 按来源开关：内置三个 + 声明了 notify.sound 的插件
+        foreach (var (source, name, builtIn) in ServiceHub.NotifySound.Sources())
+        {
+            var key = "notify.sound.source." + source;
+            AddCard(snd, CardToggle(
+                builtIn ? $"来源：{name}" : $"插件来源：{name}",
+                key,
+                cfg.Get(key, false),
+                builtIn
+                    ? "该来源有新消息时播放提示音"
+                    : $"插件 {source} 已声明 notify.sound；打开后它的消息会发声"));
+        }
         // ===== 天气设置 =====
         var weather = AddSection("天气设置", "数据来源 Open-Meteo，无需 Key");
 
@@ -770,8 +803,35 @@ public partial class SettingsPage : UserControl
         HintText.Text = "已保存";
     }
 
+    /// <summary>试听提示音（不受总开关与冷却限制，用于确认系统提示音/自定义 wav 可用）。</summary>
+    private Border BuildSoundPreviewCard()
+    {
+        var card = BaseCard("试听", "播放一次，确认提示音是否正常", out var body);
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        var play = new Button
+        {
+            Content = "播放",
+            Height = 28,
+            Padding = new Thickness(12, 0, 12, 0),
+            Margin = new Thickness(0, 0, 8, 0),
+            Style = (Style)Application.Current.FindResource("PillBtn"),
+            ToolTip = "试听当前选择的提示音",
+        };
+        play.Click += (_, _) => ServiceHub.NotifySound.Preview();
+        row.Children.Add(play);
+        body.Children.Add(row);
+        return card;
+    }
+
     private void Apply(string key, string value, IConfigService cfg)
     {
+        // 按来源的提示音开关：notify.sound.source.<source>（插件来源的键默认不存在）
+        if (key.StartsWith("notify.sound.source.", StringComparison.Ordinal))
+        {
+            cfg.Set(key, value == "true");
+            return;
+        }
+
         switch (key)
         {
             case "island.notify_style":
