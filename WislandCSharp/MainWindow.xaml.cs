@@ -392,7 +392,7 @@ public partial class MainWindow : Window
     private void LoadPluginsAndInstall()
     {
         var results = Plugins.PluginLoader.LoadAll(
-            AppContext.BaseDirectory,
+            AppPaths.BaseDir,
             ServiceHub.Config.DataDir,
             ServiceHub.Config);
 
@@ -426,7 +426,7 @@ public partial class MainWindow : Window
             App.DebugNote($"plugins: 热重载开始（{_pluginWatcher?.LastReason}）");
 
             var results = Plugins.PluginLoader.Reload(
-                AppContext.BaseDirectory,
+                AppPaths.BaseDir,
                 ServiceHub.Config.DataDir,
                 ServiceHub.Config);
 
@@ -482,7 +482,7 @@ public partial class MainWindow : Window
             App.DebugNote($"plugins: 单独重载 {id}");
 
             var result = Plugins.PluginLoader.ReloadOne(
-                id, AppContext.BaseDirectory, ServiceHub.Config.DataDir, ServiceHub.Config);
+                id, AppPaths.BaseDir, ServiceHub.Config.DataDir, ServiceHub.Config);
 
             if (result != null && result.State == Plugins.PluginState.Failed)
                 App.LogCrash($"plugin reload [{id}]", new Exception(result.Error));
@@ -972,7 +972,7 @@ public partial class MainWindow : Window
                 Try("plugin-watcher", () =>
                 {
                     _pluginWatcher = new Plugins.PluginWatcher(
-                        Plugins.PluginLoader.PluginsRoot(AppContext.BaseDirectory),
+                        Plugins.PluginLoader.PluginsRoot(AppPaths.BaseDir),
                         () => ReloadPlugins(),
                         Dispatcher);
                     App.DebugNote("plugins: 热重载已启用（监视 plugins/）");
@@ -1700,13 +1700,13 @@ public partial class MainWindow : Window
     {
         try
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "Resources", "1002.ico");
+            var path = AppPaths.ResourcePath("1002.ico");
             if (File.Exists(path))
             {
                 var h = LoadImage(IntPtr.Zero, path, ImageIcon, 0, 0, LrLoadFromFile);
                 if (h != IntPtr.Zero) return h;
             }
-            var exe = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "Wisland.exe");
+            var exe = Environment.ProcessPath ?? Path.Combine(AppPaths.BaseDir, "Wisland.exe");
             var h2 = ExtractIcon(IntPtr.Zero, exe, 0);
             if (h2 != IntPtr.Zero && h2.ToInt64() != 1) return h2;
         }
@@ -1838,7 +1838,7 @@ public partial class MainWindow : Window
             if (enable)
             {
                 var exe = Environment.ProcessPath ??
-                          Path.Combine(AppContext.BaseDirectory, "Wisland.exe");
+                          Path.Combine(AppPaths.BaseDir, "Wisland.exe");
                 key.SetValue("wisland", $"\"{exe}\" --startup");
             }
             else key.DeleteValue("wisland", false);

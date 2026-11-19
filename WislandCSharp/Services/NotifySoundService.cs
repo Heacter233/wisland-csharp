@@ -132,7 +132,7 @@ public sealed class NotifySoundService
 
     /// <summary>随程序发布的内置提示音（Resources/sound.wav）。</summary>
     public static string BuiltInSoundPath =>
-        Path.Combine(AppContext.BaseDirectory, "Resources", "sound.wav");
+        AppPaths.ResourcePath("sound.wav");
 
     private void PlayNow()
     {

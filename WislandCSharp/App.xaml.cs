@@ -124,14 +124,14 @@ public partial class App : Application
         base.OnExit(e);
     }
 
-    public static string CrashLogPath => Path.Combine(AppContext.BaseDirectory, "data", "crash.log");
+    public static string CrashLogPath => AppPaths.CrashLog;
 
     public static void DebugNote(string note)
     {
         if (Environment.GetEnvironmentVariable("WISLAND_DEBUG") != "1") return;
         try
         {
-            var dir = Path.Combine(AppContext.BaseDirectory, "data");
+            var dir = AppPaths.DataDir;
             Directory.CreateDirectory(dir);
             File.AppendAllText(Path.Combine(dir, "debug.log"),
                 $"[{DateTime.Now:HH:mm:ss.fff}] {note}`r`n", Encoding.UTF8);
@@ -143,7 +143,7 @@ public partial class App : Application
     {
         try
         {
-            var dir = Path.Combine(AppContext.BaseDirectory, "data");
+            var dir = AppPaths.DataDir;
             Directory.CreateDirectory(dir);
             var sb = new StringBuilder();
             sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {where}");

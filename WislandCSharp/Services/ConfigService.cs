@@ -98,8 +98,8 @@ public class ConfigService : IConfigService
 
     public ConfigService(string? configPath = null, string? dataDir = null)
     {
-        _configPath = configPath ?? Path.Combine(AppContext.BaseDirectory, "config.json");
-        _dataDir = dataDir ?? Path.Combine(AppContext.BaseDirectory, "data");
+        _configPath = configPath ?? AppPaths.ConfigFile;
+        _dataDir = dataDir ?? AppPaths.DataDir;
         Directory.CreateDirectory(_dataDir);
 
         // 首次运行：从旧版 Python 项目（向上查找）或 %APPDATA%\wisland 迁移配置
@@ -117,7 +117,7 @@ public class ConfigService : IConfigService
     /// <summary>向上最多 5 级查找旧版 wisland 的 config.json（bin/Debug/net8.0-windows → 项目根）。</summary>
     private static string? FindLegacyConfig()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        var dir = new DirectoryInfo(AppPaths.BaseDir);
         for (int i = 0; i < 5 && dir != null; i++, dir = dir.Parent!)
         {
             try

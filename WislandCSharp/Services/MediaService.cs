@@ -155,7 +155,7 @@ public class MediaService : IMediaService, IDisposable
             var bytes = new byte[size];
             reader.ReadBytes(bytes);
 
-            var dir = Path.Combine(AppContext.BaseDirectory, "data", "covers");
+            var dir = Path.Combine(AppPaths.DataDir, "covers");
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, $"{Guid.NewGuid():N}.jpg");
             await File.WriteAllBytesAsync(path, bytes);
@@ -199,7 +199,7 @@ public class MediaService : IMediaService, IDisposable
             if (!resp.IsSuccessStatusCode) return null;
             var bytes = await resp.Content.ReadAsByteArrayAsync();
             if (bytes.Length == 0) return null;
-            var dir = Path.Combine(AppContext.BaseDirectory, "data", "covers");
+            var dir = Path.Combine(AppPaths.DataDir, "covers");
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, $"{Guid.NewGuid():N}.jpg");
             await File.WriteAllBytesAsync(path, bytes);

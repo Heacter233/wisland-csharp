@@ -10,6 +10,15 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\1002.ico</ApplicationIcon>
     <AssemblyName>Wisland</AssemblyName>
+    <!-- 作者/公司信息：exe 属性里显示 Heacter -->
+    <Company>Heacter</Company>
+    <Authors>Heacter</Authors>
+    <Product>Wisland 灵动岛</Product>
+    <AssemblyTitle>Wisland 灵动岛</AssemblyTitle>
+    <Description>Windows 液态灵动岛：毛玻璃、媒体/天气/消息聚合、插件系统</Description>
+    <Copyright>© Heacter</Copyright>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <FileVersion>0.2.0.0</FileVersion>
     <Version>0.2.0</Version>
     <!-- 本机仅安装 .NET 10 运行时：允许 net8.0 应用滚动到更高版本运行 -->
     <RollForward>Major</RollForward>

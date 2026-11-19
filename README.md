@@ -7,18 +7,28 @@
 <img src="docs/expanded.png" width="420">
 </p>
 
-> 当前版本 **v0.1.0**（Releases 上的构建）；主线已到 **0.2.0**：插件系统、天气城市选择、消息与启动栏增强。
+> 当前版本 **v0.2.0**：插件系统成熟（5 个示例插件随包可选）、消息提示音、FF14 三件套（招募监控 / 物品价格 / 挖宝悬浮窗）。
+> 作者 **Heacter**；程序属性中的公司/作者信息见 exe 属性页。
 
 ## 下载
 
-到 [Releases](https://github.com/Heacter233/wisland-csharp/releases) 下载，两个包选一个：
+到 [Releases](https://github.com/Heacter233/wisland-csharp/releases) 下载 v0.2.0，按「运行库」和「插件版本」两个维度选一个包：
 
-| 包 | 大小 | 说明 |
-| --- | --- | --- |
-| `wisland-csharp-0.1.0-portable-x64.zip` | ~70 MB | **自带 .NET 运行库，解压即用**，不需要装任何东西 |
-| `wisland-csharp-0.1.0-slim-x64.zip` | ~7.5 MB | 体积小，但需要先装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| 包 | 大小 | 运行库 | 附带插件 |
+| --- | --- | --- | --- |
+| `wisland-csharp-0.2.0-slim-x64.zip` | ~7.8 MB | 需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0) | 普通版：股票、Clash 控制 |
+| `wisland-csharp-0.2.0-portable-x64.zip` | ~70 MB | **自带 .NET 8 运行库，解压即用** | 普通版：股票、Clash 控制 |
+| `wisland-csharp-0.2.0-ff14-slim-x64.zip` | ~8.0 MB | 需要 .NET 8 桌面运行时 | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
+| `wisland-csharp-0.2.0-ff14-portable-x64.zip` | ~70.6 MB | **自带 .NET 8 运行库，解压即用** | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
 
-双击 `Wisland.exe` 即可。首次运行会在 exe 同目录生成 `config.json` 与 `data\`；卸载直接删除文件夹（程序不写注册表，仅"开机自启"开关会登记启动项，可在设置页关闭）。
+双击 `Wisland.exe` 即可。首次运行会在 exe 同目录生成 `config.json` 与 `data\`；
+自带插件在 `plugins\<id>\`，可以在设置页「插件设置」里查看/重载，不需要时直接删掉对应目录。
+卸载直接删除文件夹（程序不写注册表，仅「开机自启」开关会登记启动项，可在设置页关闭）。
+
+> **关于「未知发布者」**：本项目没有购买商业代码签名证书，Windows 可能提示「未知发布者」或被 SmartScreen 拦截。
+> 程序以普通用户权限运行（`asInvoker`，不会请求管理员权限），exe 属性里的作者信息为 **Heacter**。
+> 处理方式：SmartScreen 提示时点「更多信息 → 仍要运行」；从浏览器下载的解压后右键 `Wisland.exe` → 属性 →
+> 勾选「解除锁定(Unblock)」→ 确定。
 
 ## 插件开发
 
@@ -37,6 +47,9 @@
 | [`samples/hello-plugin`](samples/hello-plugin) | 最小骨架：设置面板 / 插件页 / 消息推送 / 宿主定时器 |
 | [`samples/stock-plugin`](samples/stock-plugin) | 真实第三方数据：自选股增删、大盘指数、分时与日 K 迷你图、涨跌提醒、多域名切换 + 磁盘缓存 |
 | [`samples/clash-plugin`](samples/clash-plugin) | 本机服务控制：代理模式切换、策略组节点切换，**HTTP 与命名管道双通道**（自动回退） |
+| [`samples/ff14-recruit-plugin`](samples/ff14-recruit-plugin) | FF14 招募监控：关键词轮换搜索、快照差分去重、屏蔽名单/屏蔽词/休息时段、卡片列表、自定义搜索页 |
+| [`samples/ff14-price-plugin`](samples/ff14-price-plugin) | FF14 物品价格：离线物品词典（17k 条）、Universalis 市场查询、汇总/明细双表、筛选与常用词 |
+| [`samples/ff14-treasure-plugin`](samples/ff14-treasure-plugin) | FF14 挖宝悬浮窗：连 ACT 挖宝会计 WebSocket、自绘宝箱成功/失败图案、出货合并通知 |
 | [`samples/mock`](samples/mock) | 没有 Clash 时用来验证插件：HTTP mock 与命名管道 mock |
 
 ## 关于本项目
@@ -71,7 +84,10 @@
 | Anki 同步 | ❌ | 单词本只存本地，未接入 Anki |
 | 股票行情 | ✅ | **通过示例插件实现**（`samples/stock-plugin`）：自选股、大盘指数、分时/日K 迷你图、涨跌提醒 |
 | Clash 代理控制 | ✅ | **通过示例插件实现**（`samples/clash-plugin`）：模式切换、策略组节点切换，支持 HTTP 与命名管道 |
-| 插件系统 | ✅ | 清单校验 + 独立 AssemblyLoadContext 加载 + 权限守门 + 设置面板与插件页挂载 + 异常隔离；规范见 [docs/plugins.md](docs/plugins.md) |
+| 插件系统 | ✅ | 清单校验 + 独立 AssemblyLoadContext 加载 + 权限守门 + 设置面板与插件页挂载 + 插件页热重载 + 异常隔离；规范见 [docs/plugins.md](docs/plugins.md) |
+| FF14 招募监控 | ✅ | **通过示例插件实现**（`samples/ff14-recruit-plugin`）：关键词轮换搜索招募板、快照差分去重、屏蔽/休息时段、卡片结果、自定义搜索页 |
+| FF14 物品价格 | ✅ | **通过示例插件实现**（`samples/ff14-price-plugin`）：离线物品词典 + Universalis 价格、汇总/明细双表、筛选与常用词 |
+| FF14 挖宝悬浮窗 | ✅ | **通过示例插件实现**（`samples/ff14-treasure-plugin`）：连接 ACT 挖宝会计 OverlayServer，悬浮窗 + 成功/失败宝箱图案通知 |
 
 ## 新增功能（原版没有）
 
@@ -234,14 +250,26 @@ dotnet build -c Debug
 发布（与 Releases 一致）：
 
 ```bash
-# 轻量版（需装 .NET 8 桌面运行时）
-dotnet publish WislandCSharp\Wisland.csproj -c Release -r win-x64 --self-contained false -o publish\slim
+# 1) 轻量版（需装 .NET 8 桌面运行时）
+dotnet publish WislandCSharp\Wisland.csproj -c Release -r win-x64 --self-contained false ^
+  -p:DebugType=None -p:DebugSymbols=false -o publish\slim
 
-# 自包含单文件版（解压即用）
+# 2) 自包含单文件版（解压即用）
+#    IncludeAllContentForSelfExtract 必须开：否则 Resources\1002.ico / sound.wav 不会随包
 dotnet publish WislandCSharp\Wisland.csproj -c Release -r win-x64 --self-contained true ^
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true ^
-  -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o publish\portable
+  -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true ^
+  -p:DebugType=None -p:DebugSymbols=false -o publish\portable
+
+# 3) 组装发行包：把插件拷进 plugins\<id>\，再压缩
+#    普通版       = plugins\stock + plugins\clash
+#    FF14 专版    = 普通版 + plugins\ff14-recruit + ff14-price + ff14-treasure
+#    四个包 = {slim, portable} × {普通版, FF14 专版}
 ```
+
+> 单文件自包含版会把 `Resources` 解包到临时目录，因此程序内部统一用
+> `AppPaths.BaseDir`（取 `Environment.ProcessPath` 的真实目录）来定位 `config.json` / `data\` / `plugins\`，
+> 保证配置与插件始终写在 exe 旁边，不会因为临时目录被清理而丢失。
 
 ## 目录结构
 
@@ -272,6 +300,9 @@ samples/                     插件范例（见 samples/README.md）
 ├─ hello-plugin/             最小骨架
 ├─ stock-plugin/             股票行情
 ├─ clash-plugin/             Clash 控制（HTTP + 命名管道）
+├─ ff14-recruit-plugin/      FF14 招募监控（监控 + 搜索页）
+├─ ff14-price-plugin/        FF14 物品价格（离线词典 + Universalis）
+├─ ff14-treasure-plugin/     FF14 挖宝悬浮窗（ACT WebSocket）
 └─ mock/                     Clash 测试替身
 ```
 

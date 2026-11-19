@@ -256,7 +256,7 @@ public partial class SettingsPage : UserControl
         {
             try
             {
-                var dir = Path.Combine(AppContext.BaseDirectory, "plugins");
+                var dir = Path.Combine(AppPaths.BaseDir, "plugins");
                 Directory.CreateDirectory(dir);
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
             }
