@@ -89,11 +89,23 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         public bool CrossWorld = true;
     }
 
+    /// <summary>一条命中记录：页面上按卡片显示，字段足够渲染完整信息。</summary>
     private sealed class Hit
     {
         public DateTime Time { get; set; } = DateTime.Now;
         public string Keyword { get; set; } = "";
-        public string Text { get; set; } = "";
+        public string Category { get; set; } = "";
+        public string Duty { get; set; } = "";
+        /// <summary>发布服务器（大区昵称@服务器名）。</summary>
+        public string Server { get; set; } = "";
+        public string Player { get; set; } = "";
+        public string HomeWorld { get; set; } = "";
+        public long ItemLevel { get; set; }
+        public long SlotsFilled { get; set; }
+        public long SlotsAvailable { get; set; }
+        public long TimeLeftSeconds { get; set; }
+        public string Description { get; set; } = "";
+        public bool CrossWorld { get; set; } = true;
     }
 
     private sealed class Ban
@@ -137,7 +149,7 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
             Key = PluginId,
             Title = "FF14 招募监控",
             Glyph = "\uE8BD",
-            Height = 380,
+            Height = 470,
             Build = BuildPage,
         });
 
@@ -177,6 +189,9 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
     private int MaxPages => Math.Clamp(Cfg("max_pages", 2), 1, 5);
 
     private int MaxPushPerCheck => Math.Clamp(Cfg("max_push", 3), 1, 10);
+
+    /// <summary>页面最多显示多少条命中记录（默认 10，可配置到 30）。</summary>
+    private int MaxHits => Math.Clamp(Cfg("max_hits", 10), 5, 30);
 
     private string ApiBase
     {
@@ -526,7 +541,13 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
             var kw = kws[_keywordIndex % kws.Count];
             _keywordIndex++;
 
-            var found = await FetchAsync(kw, MaxPages, _ctx.ShutdownToken);
+            var fetched = await FetchAsync(kw, MaxPages, _ctx.ShutdownToken);
+
+            // 只监控国服：worlds.json 里只有国服服务器，发布服务器不在表里的（国际服）一律丢弃。
+            // 接口本身不区分区服，这一步在本地过滤，避免把国际服招募也推过来。
+            var found = fetched.Where(l => _worlds.ContainsKey(l.CreatedWorldId)).ToList();
+            var filteredOut = fetched.Count - found.Count;
+
             var ids = found.Select(l => l.Id).Where(id => id.Length > 0).Distinct().ToList();
 
             List<string> oldIds;
@@ -558,7 +579,9 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
 
             _lastCheckAt = DateTime.Now;
             _lastError = "";
-            SetStatus($"检查完成 · {kw} · 抓到 {found.Count} 条 · 新增 {fresh.Count} 条 · 推送 {pushed} 条"
+            SetStatus($"检查完成 · {kw} · 国服 {found.Count} 条"
+                      + (filteredOut > 0 ? $"（过滤国际服 {filteredOut}）" : "")
+                      + $" · 新增 {fresh.Count} · 推送 {pushed}"
                       + (skippedDup + skippedBan + skippedBlock > 0
                           ? $"（跳过 重复{skippedDup}/屏蔽{skippedBan}/屏蔽词{skippedBlock}）"
                           : ""));
@@ -732,10 +755,22 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         return string.Join(" ｜ ", parts);
     }
 
+    /// <summary>服务器显示名：大区昵称@服务器名（未知时退回服务器 id）。</summary>
+    private string ServerDisplay(Listing l)
+    {
+        var w = World(l.CreatedWorldId);
+        return string.IsNullOrWhiteSpace(w.DcNick) ? w.Name : $"{w.DcNick}@{w.Name}";
+    }
+
     private void PushRecruit(string keyword, Listing l)
     {
         if (_ctx == null) return;
-        var text = FormatListing(l);
+
+        // 消息页只放"服务器名 + 内容"：完整信息（类别/副本/玩家/装等/位置/剩余）留给插件页的卡片
+        var server = ServerDisplay(l);
+        var desc = (l.Description ?? "").Trim().Replace("\r", " ").Replace("\n", " ");
+        if (desc.Length == 0) desc = $"{CategoryName(l.CategoryId)}：{DutyName(l.CategoryId, l.DutyId)}";
+        var body = $"{server}：{desc}";
 
         try
         {
@@ -744,8 +779,8 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
                 // Source 必须等于插件 id：宿主按它查 notify.sound 声明来决定能否播放提示音
                 Source = PluginId,
                 SourceName = "FF14 招募",
-                Title = $"侦测到在途的「{keyword}」招募",
-                Body = text,
+                Title = $"侦测到「{keyword}」· {server}",
+                Body = body,
                 Level = "info",
                 IconGlyph = "\uE8BD",
                 IconColor = "#C9A227",
@@ -757,9 +792,25 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
             return;
         }
 
+        var hw = World(l.HomeWorldId);
         lock (_lock)
         {
-            _hits.Insert(0, new Hit { Time = DateTime.Now, Keyword = keyword, Text = text });
+            _hits.Insert(0, new Hit
+            {
+                Time = DateTime.Now,
+                Keyword = keyword,
+                Category = CategoryName(l.CategoryId),
+                Duty = DutyName(l.CategoryId, l.DutyId),
+                Server = server,
+                Player = l.Player,
+                HomeWorld = hw.Name,
+                ItemLevel = l.MinItemLevel,
+                SlotsFilled = l.SlotsFilled,
+                SlotsAvailable = l.SlotsAvailable,
+                TimeLeftSeconds = l.TimeLeftSeconds,
+                Description = desc,
+                CrossWorld = l.CrossWorld,
+            });
             if (_hits.Count > 30) _hits.RemoveRange(30, _hits.Count - 30);
         }
         SaveHits();
@@ -853,9 +904,19 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         root.Children.Add(row);
 
         // 最近命中
-        root.Children.Add(Text("最近命中", "T3", 11, margin: new Thickness(0, 12, 0, 0)));
-        _hitsPanel = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
-        root.Children.Add(_hitsPanel);
+        root.Children.Add(Text("最近命中（卡片按时间倒序）", "T3", 11, margin: new Thickness(0, 12, 0, 0)));
+        _hitsPanel = new StackPanel { Margin = new Thickness(0, 6, 4, 0) };
+        // 全部命中装进一个容器，滚动查看（内容高度固定，避免把岛撑爆）
+        var hitsScroll = new ScrollViewer
+        {
+            MaxHeight = 250,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Padding = new Thickness(0),
+        };
+        hitsScroll.SetResourceReference(FrameworkElement.StyleProperty, "AppScroll");
+        hitsScroll.Content = _hitsPanel;
+        root.Children.Add(hitsScroll);
 
         RefreshUi();
         return root;
@@ -926,34 +987,70 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         {
             _hitsPanel.Children.Clear();
             List<Hit> hits;
-            lock (_lock) hits = _hits.Take(8).ToList();
+            var limit = MaxHits;
+            lock (_lock) hits = _hits.Take(limit).ToList();
             if (hits.Count == 0)
             {
                 _hitsPanel.Children.Add(Text("还没有命中记录", "T3", 11));
             }
             else
             {
-                foreach (var h in hits)
-                {
-                    var grid = new Grid { Margin = new Thickness(0, 2, 0, 2) };
-                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(46) });
-                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-                    var t = Text(h.Time.ToString("HH:mm"), "T3", 10.5);
-                    t.FontFamily = (FontFamily)SafeResource("NumFont", new FontFamily("Segoe UI"));
-                    Grid.SetColumn(t, 0);
-                    grid.Children.Add(t);
-
-                    var body = Text(h.Text, "T3", 11);
-                    body.TextTrimming = TextTrimming.CharacterEllipsis;
-                    body.ToolTip = h.Text;
-                    Grid.SetColumn(body, 1);
-                    grid.Children.Add(body);
-
-                    _hitsPanel.Children.Add(grid);
-                }
+                foreach (var h in hits) _hitsPanel.Children.Add(BuildHitCard(h));
             }
         }
+    }
+
+    /// <summary>一条命中记录的卡片：完整信息（类别/副本、发布服务器、玩家、装等、位置、剩余、描述）。</summary>
+    private FrameworkElement BuildHitCard(Hit h)
+    {
+        var card = new Border
+        {
+            Margin = new Thickness(0, 0, 0, 6),
+            Padding = new Thickness(10, 8, 10, 8),
+        };
+        card.SetResourceReference(FrameworkElement.StyleProperty, "Card");
+
+        var box = new StackPanel();
+
+        // 第一行：类别：副本 + 服务器 + 时间
+        var head = new Grid();
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(48) });
+
+        var title = Text($"{h.Category}：{h.Duty}", "T2", 12, FontWeights.SemiBold);
+        title.TextTrimming = TextTrimming.CharacterEllipsis;
+        Grid.SetColumn(title, 0);
+        head.Children.Add(title);
+
+        var time = Text(h.Time.ToString("HH:mm"), "T3", 10.5);
+        time.FontFamily = (FontFamily)SafeResource("NumFont", new FontFamily("Segoe UI"));
+        time.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(time, 1);
+        head.Children.Add(time);
+        box.Children.Add(head);
+
+        // 第二行：服务器 + 玩家 + 装等/位置/剩余
+        var meta = new List<string> { h.Server };
+        if (!string.IsNullOrWhiteSpace(h.Player)) meta.Add($"{h.Player}@{h.HomeWorld}");
+        if (h.ItemLevel > 0) meta.Add($"装等{h.ItemLevel}");
+        meta.Add($"位置{h.SlotsFilled}/{h.SlotsAvailable}");
+        meta.Add($"剩余{FormatTimeLeft(h.TimeLeftSeconds)}");
+        if (!h.CrossWorld) meta.Add("本地");
+        box.Children.Add(Text(string.Join(" · ", meta), "T3", 10.5));
+
+        // 第三行：描述（最多两行）
+        if (!string.IsNullOrWhiteSpace(h.Description))
+        {
+            var desc = Text(h.Description, "T3", 11, margin: new Thickness(0, 4, 0, 0));
+            desc.TextWrapping = TextWrapping.Wrap;
+            desc.MaxHeight = 32;
+            desc.TextTrimming = TextTrimming.CharacterEllipsis;
+            desc.ToolTip = h.Description;
+            box.Children.Add(desc);
+        }
+
+        card.Child = box;
+        return card;
     }
 
     // ---------------- 设置面板 ----------------
@@ -963,7 +1060,8 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         var root = new StackPanel();
 
         root.Children.Add(Text(
-            "插件轮换搜索这些关键词，发现**新出现**的招募就推送到消息页。多个关键词用逗号分隔。",
+            "插件轮换搜索这些关键词，发现**新出现**的招募就推送到消息页。多个关键词用逗号分隔。"
+            + "只保留国服（发布服务器在国服列表里）的招募，国际服会被过滤。",
             "T3", 11).Also(tb => tb.TextWrapping = TextWrapping.Wrap));
 
         var kwBox = new TextBox
@@ -984,12 +1082,15 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         var interval = NumBox("interval_sec", 90, 64);
         var pages = NumBox("max_pages", 2, 48);
         var maxPush = NumBox("max_push", 3, 48);
+        var maxHits = NumBox("max_hits", 10, 48);
         row.Children.Add(Text("间隔(秒)", "T3", 11));
         row.Children.Add(interval);
         row.Children.Add(Text("最多页数", "T3", 11, margin: new Thickness(12, 0, 0, 0)));
         row.Children.Add(pages);
         row.Children.Add(Text("每次最多推送", "T3", 11, margin: new Thickness(12, 0, 0, 0)));
         row.Children.Add(maxPush);
+        row.Children.Add(Text("最多显示", "T3", 11, margin: new Thickness(12, 0, 0, 0)));
+        row.Children.Add(maxHits);
         root.Children.Add(row);
 
         // 休息时段
@@ -1060,6 +1161,7 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
                 _ctx?.Config.Set("interval_sec", Math.Clamp(ParseInt(interval.Text, 90), 30, 1800));
                 _ctx?.Config.Set("max_pages", Math.Clamp(ParseInt(pages.Text, 2), 1, 5));
                 _ctx?.Config.Set("max_push", Math.Clamp(ParseInt(maxPush.Text, 3), 1, 10));
+                _ctx?.Config.Set("max_hits", Math.Clamp(ParseInt(maxHits.Text, 10), 5, 30));
                 _ctx?.Config.Set("rest_start", (restStart.Text ?? "").Trim());
                 _ctx?.Config.Set("rest_end", (restEnd.Text ?? "").Trim());
                 _ctx?.Config.Set("block_keywords", block.Text ?? "");

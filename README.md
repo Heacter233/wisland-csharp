@@ -120,7 +120,8 @@ ServiceHub.Inbox.Push(new PluginMessage {
 
 - 总开关 + **按来源独立开关**：QQ / 微信 / 邮件、以及每个声明了 `notify.sound` 的插件来源各自一路
 - 内置来源**默认全部关闭**，想要哪一路响就单独打开
-- 提示音可选系统提示音（默认）或自定义 `.wav`；有全局冷却（默认 3 秒）避免连续轰炸
+- 提示音默认用**程序自带的 `Resources/sound.wav`**（设置里可选系统提示音/蜂鸣等，或指定自定义 `.wav`）；
+  有全局冷却（默认 3 秒）避免连续轰炸
 - **插件必须声明 `notify.sound` 才可能发声**，未声明的插件来源即使开关打开也不响（宿主记日志）
 
 ### 6. 系统通知统一进 Inbox
@@ -196,6 +197,10 @@ ServiceHub.Inbox.Push(new PluginMessage {
 | `plugins.enabled` | 是否加载插件（默认 `true`） |
 | `plugins.hot_reload` | `plugins/` 变化时自动重载（默认 `true`） |
 | `plugins.disabled` | 要禁用的插件 id 列表 |
+| `notify.sound.enabled` | 消息提示音总开关（默认 false） |
+| `notify.sound.kind` | `builtin`（自带 sound.wav，默认）/ `asterisk` / `beep` / `exclamation` / `question` / `hand` |
+| `notify.sound.file` | 自定义 `.wav` 路径，留空用上面的类型 |
+| `notify.sound.cooldown_ms` | 提示音全局冷却（默认 3000） |
 | `notify.open.qq` / `wechat` / `mail` | 点磁贴打开的 exe；留空自动探测并回写 |
 
 ## 已知问题

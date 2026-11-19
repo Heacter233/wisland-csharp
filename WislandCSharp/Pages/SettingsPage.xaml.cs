@@ -127,9 +127,9 @@ public partial class SettingsPage : UserControl
             "总开关。关闭时任何来源都不会发声"));
 
         AddCard(snd, CardChoice("提示音类型", "notify.sound.kind",
-            new[] { "asterisk", "beep", "exclamation", "question", "hand" },
-            new[] { "系统默认", "蜂鸣", "感叹", "疑问", "警告" },
-            cfg.Get("notify.sound.kind", "asterisk")));
+            new[] { "builtin", "asterisk", "beep", "exclamation", "question", "hand" },
+            new[] { "内置提示音", "系统默认", "蜂鸣", "感叹", "疑问", "警告" },
+            cfg.Get("notify.sound.kind", "builtin")));
 
         AddCard(snd, CardText("自定义提示音（.wav）", "notify.sound.file",
             cfg.Get("notify.sound.file", ""),

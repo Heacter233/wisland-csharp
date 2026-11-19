@@ -128,30 +128,39 @@ public sealed class NotifySoundService
         }
     }
 
+    /// <summary>随程序发布的内置提示音（Resources/sound.wav）。</summary>
+    public static string BuiltInSoundPath =>
+        Path.Combine(AppContext.BaseDirectory, "Resources", "sound.wav");
+
     private void PlayNow()
     {
         var file = "";
         try { file = ServiceHub.Config.Get("notify.sound.file", "") ?? ""; } catch { }
 
+        // 用户自定义 wav 优先
         if (!string.IsNullOrWhiteSpace(file) && File.Exists(file) &&
-            file.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+            file.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) && TryPlayWav(file))
         {
-            // SoundPlayer.Play() 是异步的，不会阻塞 UI 线程
-            var player = new SoundPlayer(file);
-            try
-            {
-                player.Load();
-                player.Play();
-                return;
-            }
-            catch
-            {
-                // 文件损坏/格式不支持 → 退回系统提示音
-            }
+            App.DebugNote("sound: 使用自定义提示音 " + file);
+            return;
         }
 
         var kind = "";
-        try { kind = ServiceHub.Config.Get("notify.sound.kind", "asterisk") ?? "asterisk"; } catch { }
+        try { kind = ServiceHub.Config.Get("notify.sound.kind", "builtin") ?? "builtin"; } catch { }
+
+        // 内置提示音（默认）：程序自带的 sound.wav；缺失时退回系统提示音
+        if (kind.Equals("builtin", StringComparison.OrdinalIgnoreCase))
+        {
+            if (File.Exists(BuiltInSoundPath) && TryPlayWav(BuiltInSoundPath))
+            {
+                App.DebugNote("sound: 使用内置提示音 " + BuiltInSoundPath);
+                return;
+            }
+            App.DebugNote("sound: 内置提示音缺失，退回系统提示音");
+            SystemSounds.Asterisk.Play();
+            return;
+        }
+
         switch (kind.ToLowerInvariant())
         {
             case "beep": SystemSounds.Beep.Play(); break;
@@ -160,6 +169,19 @@ public sealed class NotifySoundService
             case "hand": SystemSounds.Hand.Play(); break;
             default: SystemSounds.Asterisk.Play(); break;
         }
+    }
+
+    /// <summary>播放 wav（异步，不阻塞 UI）；失败返回 false 以便退回下一种声音。</summary>
+    private static bool TryPlayWav(string path)
+    {
+        try
+        {
+            var player = new SoundPlayer(path);
+            player.Load();
+            player.Play();
+            return true;
+        }
+        catch { return false; }
     }
 
     /// <summary>设置页列出可配置的来源：内置三个 + 声明了 notify.sound 的插件。</summary>

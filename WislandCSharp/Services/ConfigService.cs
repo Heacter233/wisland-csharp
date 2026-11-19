@@ -71,7 +71,7 @@ public class ConfigService : IConfigService
             {
                 // 默认关闭：内置来源（QQ/微信/邮件）与插件来源都各自有开关
                 ["enabled"] = false,
-                ["kind"] = "asterisk",
+                ["kind"] = "builtin",
                 ["file"] = "",
                 ["cooldown_ms"] = 3000,
                 ["source"] = new Dictionary<string, object?>

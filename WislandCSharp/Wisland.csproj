@@ -26,6 +26,10 @@
     <Content Include="Resources\1002.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- 内置消息提示音：默认用它，用户可在设置里换成自己的 wav -->
+    <Content Include="Resources\sound.wav">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>
