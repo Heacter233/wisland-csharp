@@ -1,0 +1,18 @@
+{
+  "id": "ff14-treasure",
+  "name": "FF14 挖宝悬浮窗",
+  "version": "1.0.0",
+  "author": "Heacter",
+  "description": "ACT 挖宝会计的灵动岛悬浮窗：连接 ACT 插件 WebSocket，展示统计/出货/层级，鉴定成功失败用自绘宝箱图案推送通知",
+  "entry": "Ff14TreasurePlugin.Ff14TreasurePlugin",
+  "assembly": "Ff14TreasurePlugin.dll",
+  "minHostVersion": "0.2.0",
+  "permissions": [
+    "network.local",
+    "messages.push",
+    "ui.compact",
+    "ui.page",
+    "ui.settings"
+  ],
+  "homepage": "https://github.com/Heacter233/wisland-csharp"
+}

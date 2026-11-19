@@ -10,6 +10,7 @@
 | [`clash-plugin`](clash-plugin) | Clash 控制 | 只访问本机（`network.local`）、HTTP + 命名管道双通道、分段控件、可点击标签 |
 | [`ff14-recruit-plugin`](ff14-recruit-plugin) | FF14 招募监控 | 关键词轮换轮询、快照差分去重、屏蔽名单/屏蔽词/休息时段、本地静态表（CSV/JSON）、卡片式结果列表、第二个自定义搜索页、`notify.sound` 提示音权限 |
 | [`ff14-price-plugin`](ff14-price-plugin) | FF14 物品价格 | 离线物品词典（CSV→TSV 生成）、Universalis 市场查询、汇总/明细双 DataGrid、筛选与常用词 |
+| [`ff14-treasure-plugin`](ff14-treasure-plugin) | FF14 挖宝悬浮窗 | 连接 ACT 插件 WebSocket、灵动岛版悬浮窗、自绘宝箱成功/失败图案、出货合并通知、断线重连 |
 | [`mock`](mock) | 测试替身 | 无 Clash 环境下验证 Clash 插件：HTTP mock 与命名管道 mock |
 
 ## 构建与安装
@@ -67,6 +68,20 @@ dotnet build -c Debug
 - 物品词典 `data/items.tsv` 由 ffxiv-datamining-cn 的 `Item.csv` 生成（17,372 条，457KB），随插件安装
 - 价格来自 Universalis v2；同一物品+大区缓存 60 秒，「刷新」强制重查
 - 汇总表（按服务器最低价）/ 明细表（每条挂单）可切换，两张表都支持点表头排序
+## FF14 挖宝悬浮窗插件
+
+```bash
+cd samples/ff14-treasure-plugin
+dotnet build -c Debug
+
+# 安装（目录名必须等于 id：ff14-treasure）
+<程序目录>/plugins/ff14-treasure/plugin.json
+<程序目录>/plugins/ff14-treasure/Ff14TreasurePlugin.dll
+```
+
+- 前置：ACT 里已启用 FF14TreasureHunterACT，且其「悬浮窗服务」开着（`overlay_enabled`，默认端口 8765）
+- 插件连 `ws://127.0.0.1:8765/ws`，**不改动 ACT 项目**；断线自动重连
+- 鉴定成功/失败用自绘宝箱图案推送（开箱发光 / 箱子打叉）；出货合并成一条通知
 ## 验证 Clash 插件（无需真的跑 Clash）
 
 ```bash

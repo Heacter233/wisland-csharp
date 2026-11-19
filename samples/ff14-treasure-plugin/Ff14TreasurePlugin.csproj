@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Ff14TreasurePlugin</AssemblyName>
+    <RootNamespace>Ff14TreasurePlugin</RootNamespace>
+    <OutputType>Library</OutputType>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=false：契约类型由宿主提供 -->
+    <ProjectReference Include="..\..\WislandCSharp\Wisland.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>
