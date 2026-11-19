@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using Wisland.Plugins;
 
 namespace Wisland.Services;
 
@@ -11,32 +13,40 @@ public sealed class PluginSettingsSection
     public string Id { get; init; } = "";
     public string Title { get; init; } = "";
     public string Subtitle { get; init; } = "";
-    /// <summary>构建面板内容（由插件实现，宿主只负责放位置）。</summary>
+    /// <summary>构建面板内容（由插件实现，宿主只负责放位置）。在 UI 线程延迟调用。</summary>
     public Func<System.Windows.FrameworkElement> Build { get; init; } = () => new System.Windows.Controls.StackPanel();
 }
 
-/// <summary>插件声明。</summary>
+/// <summary>插件声明与运行时状态（设置页展示用）。</summary>
 public sealed class PluginInfo
 {
     public string Id { get; init; } = "";
     public string Name { get; init; } = "";
     public string Version { get; init; } = "0.0.0";
     public string Description { get; init; } = "";
+    public string Author { get; init; } = "";
     public PluginSettingsSection? Settings { get; init; }
+
+    /// <summary>加载状态。</summary>
+    public PluginState State { get; init; } = PluginState.Loaded;
+
+    /// <summary>加载失败原因（State = Failed 时有值）。</summary>
+    public string Error { get; init; } = "";
+
+    /// <summary>清单里声明的权限。</summary>
+    public string[] Permissions { get; init; } = Array.Empty<string>();
 
     /// <summary>该插件会向消息页推送文本消息（声明后宿主可在设置页展示，并用于告警过滤）。</summary>
     public bool PushesMessages { get; init; }
+
+    public bool IsLoaded => State == PluginState.Loaded;
 }
 
 /// <summary>
-/// 插件注册表（预留接口）。
+/// 插件注册表：保存已加载插件（含失败/禁用），供设置页展示。
 ///
-/// 设计目的：让后续功能（例如 Clash 集成、歌词源、通知源）以插件形式接入，
-/// 而不必改动主程序。设置页会遍历这里的条目，为每个插件追加一个设置分组。
-///
-/// 当前主程序尚未加载任何外部插件，<see cref="Plugins"/> 为空，
-/// 设置页会显示"暂无插件"。接入方式：
-///   PluginRegistry.Register(new PluginInfo { ... Settings = new PluginSettingsSection { Build = () => panel } });
+/// 正常流程由 <see cref="PluginLoader"/> 在启动时填充；
+/// 也可以在宿主内部直接 <see cref="Register"/>（例如把内置功能包装成插件面板）。
 /// </summary>
 public static class PluginRegistry
 {
@@ -48,6 +58,12 @@ public static class PluginRegistry
     public static IReadOnlyList<PluginInfo> Plugins
     {
         get { lock (_lock) return _plugins.ToArray(); }
+    }
+
+    /// <summary>已成功加载的插件数（不含失败/禁用）。</summary>
+    public static int LoadedCount
+    {
+        get { lock (_lock) return _plugins.Count(p => p.IsLoaded); }
     }
 
     public static bool Register(PluginInfo plugin)
@@ -62,10 +78,34 @@ public static class PluginRegistry
         return true;
     }
 
+    /// <summary>注册或覆盖（重新加载时用）。</summary>
+    public static void RegisterOrReplace(PluginInfo plugin)
+    {
+        if (string.IsNullOrWhiteSpace(plugin.Id)) return;
+        lock (_lock)
+        {
+            _plugins.RemoveAll(p => p.Id == plugin.Id);
+            _plugins.Add(plugin);
+        }
+        Changed?.Invoke(null, EventArgs.Empty);
+    }
+
     public static void Unregister(string id)
     {
         lock (_lock) _plugins.RemoveAll(p => p.Id == id);
         Changed?.Invoke(null, EventArgs.Empty);
+    }
+
+    public static void Clear()
+    {
+        lock (_lock) _plugins.Clear();
+        Changed?.Invoke(null, EventArgs.Empty);
+    }
+
+    /// <summary>按 id 取插件。</summary>
+    public static PluginInfo? Find(string id)
+    {
+        lock (_lock) return _plugins.Find(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
     }
 }
 
@@ -93,14 +133,14 @@ public static class PendingFeatures
         new Item
         {
             Title = "Clash 集成",
-            State = "未接入",
-            Note = "需要读取 Clash 外部控制器 API，暂未对接",
+            State = "待插件",
+            Note = "可由插件通过 network.local + messages.push 接入外部控制器 API",
         },
         new Item
         {
-            Title = "插件系统",
-            State = "接口就绪",
-            Note = "PluginRegistry 已提供注册与设置面板挂载点，暂无已加载插件",
+            Title = "股票行情",
+            State = "待插件",
+            Note = "可由插件通过 network + messages.push 实现",
         },
     };
 }

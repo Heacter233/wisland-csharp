@@ -104,6 +104,9 @@ public partial class App : Application
     {
         try
         {
+            // 先卸载插件：让插件在宿主服务还活着时释放资源
+            try { Plugins.PluginLoader.UnloadAll(); } catch { }
+
             ServiceHub.Clipboard?.Stop();
             ServiceHub.Hotkey?.UnregisterAll();
             ServiceHub.Config?.Save();

@@ -1,0 +1,15 @@
+{
+  "id": "hello",
+  "name": "示例插件",
+  "version": "1.0.0",
+  "author": "wisland",
+  "description": "演示插件清单、权限声明、消息推送、宿主定时器与设置面板写法",
+  "entry": "HelloPlugin.HelloPlugin",
+  "assembly": "HelloPlugin.dll",
+  "minHostVersion": "0.2.0",
+  "permissions": [
+    "messages.push",
+    "ui.settings"
+  ],
+  "homepage": "https://github.com/Heacter233/wisland-csharp"
+}

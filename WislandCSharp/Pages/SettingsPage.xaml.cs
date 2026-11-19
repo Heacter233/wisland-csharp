@@ -9,6 +9,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using Wisland.Controls;
+using Wisland.Plugins;
 using Wisland.Services;
 using Wisland.Theme;
 
@@ -150,26 +151,26 @@ public partial class SettingsPage : UserControl
         AddCard(clip, CardSlider("剪贴板轮询间隔", "clipboard.poll_ms", 100, 1000, 50,
             cfg.Get("clipboard.poll_ms", 300), v => $"{v} 毫秒"));
 
-        // ===== 插件设置（由 PluginRegistry 提供的分组） =====
+        // ===== 插件设置（由 PluginLoader / PluginRegistry 提供的分组） =====
         var plugins = PluginRegistry.Plugins;
+        var loaded = plugins.Count(p => p.IsLoaded);
         var pluginSec = AddSection("插件设置",
-            plugins.Count == 0 ? "暂无插件 · 接口已预留，插件可注册自己的设置面板"
-                               : $"已加载 {plugins.Count} 个插件");
-        if (plugins.Count == 0)
+            plugins.Count == 0 ? "暂无插件 · 把插件解压到 plugins\\<id>\\ 即可"
+                               : $"已加载 {loaded} / 共 {plugins.Count} 个");
+
+        // 顶部：插件目录 + 说明
+        var dirCard = new Border
         {
-            AddCard(pluginSec, InfoCard("插件接口就绪",
-                "第三方功能可通过 PluginRegistry.Register 挂到此处"));
-        }
-        else
+            Style = (Style)FindResource("Card"),
+            Width = 590,
+            Child = BuildPluginHint(plugins.Count),
+        };
+        AddCard(pluginSec, dirCard);
+
+        // 每个插件一张卡：名字/版本/状态/权限/错误/设置入口
+        foreach (var pl in plugins)
         {
-            foreach (var pl in plugins)
-            {
-                if (pl.Settings is { } sec)
-                {
-                    var secWrap = AddSection(sec.Title, string.IsNullOrEmpty(sec.Subtitle) ? $"{pl.Name} {pl.Version}" : sec.Subtitle);
-                    try { AddCard(secWrap, new Border { Width = 590, Child = sec.Build() }); } catch { }
-                }
-            }
+            AddCard(pluginSec, BuildPluginCard(pl));
         }
 
         // ===== 扩展与实验（诚实标注未实现项） =====
@@ -180,6 +181,205 @@ public partial class SettingsPage : UserControl
         }
 
         Host.Refresh();
+    }
+
+    /// <summary>插件分组顶部：说明 + 打开插件目录。</summary>
+    private Border BuildPluginHint(int total)
+    {
+        var sp = new StackPanel();
+
+        sp.Children.Add(new TextBlock
+        {
+            Text = total == 0
+                ? "把插件解压到程序目录下的 plugins\\<id>\\（内含 plugin.json），重启后生效。"
+                : "插件从 plugins\\<id>\\ 加载；修改后需重启宿主。开发规范见 docs/plugins.md。",
+            Style = (Style)FindResource("T3"),
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 10, 0, 0),
+        };
+        var open = new Button
+        {
+            Content = "打开插件目录",
+            Style = (Style)FindResource("PillBtn"),
+            Height = 26,
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+        open.Click += (_, _) =>
+        {
+            try
+            {
+                var dir = Path.Combine(AppContext.BaseDirectory, "plugins");
+                Directory.CreateDirectory(dir);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
+            }
+            catch { }
+        };
+        row.Children.Add(open);
+
+        var openData = new Button
+        {
+            Content = "插件数据目录",
+            Style = (Style)FindResource("PillBtn"),
+            Height = 26,
+            FontSize = 12,
+        };
+        openData.Click += (_, _) =>
+        {
+            try
+            {
+                var dir = Path.Combine(ServiceHub.Config.DataDir, "plugins");
+                Directory.CreateDirectory(dir);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
+            }
+            catch { }
+        };
+        row.Children.Add(openData);
+        sp.Children.Add(row);
+
+        return new Border { Style = (Style)FindResource("Card"), Width = 590, Child = sp };
+    }
+
+    /// <summary>单个插件卡片：名称/版本/状态/权限/错误 + 设置入口。</summary>
+    private Border BuildPluginCard(PluginInfo pl)
+    {
+        var sp = new StackPanel();
+
+        // 标题行：名字 + 版本 + 状态徽标
+        var head = new StackPanel { Orientation = Orientation.Horizontal };
+        head.Children.Add(new TextBlock
+        {
+            Text = pl.Name,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Themes.Text()),
+            FontFamily = new FontFamily(Wisland.Theme.Fonts.Ui),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        head.Children.Add(new TextBlock
+        {
+            Text = "  v" + pl.Version,
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Themes.Text3()),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        head.Children.Add(new Border
+        {
+            Margin = new Thickness(8, 0, 0, 0),
+            Padding = new Thickness(7, 1, 7, 2),
+            CornerRadius = new CornerRadius(8),
+            Background = new SolidColorBrush(pl.State switch
+            {
+                PluginState.Loaded => Themes.OnColor(),
+                PluginState.Disabled => Themes.Track(),
+                _ => Color.FromArgb(48, 232, 84, 78),
+            }),
+            Child = new TextBlock
+            {
+                Text = pl.State switch
+                {
+                    PluginState.Loaded => "已加载",
+                    PluginState.Disabled => "已禁用",
+                    _ => "加载失败",
+                },
+                FontSize = 10.5,
+                Foreground = new SolidColorBrush(pl.State == PluginState.Loaded ? Themes.OnFg() : Themes.Text()),
+            },
+        });
+        sp.Children.Add(head);
+
+        if (!string.IsNullOrWhiteSpace(pl.Description))
+        {
+            sp.Children.Add(new TextBlock
+            {
+                Text = pl.Description,
+                Style = (Style)FindResource("T3"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(pl.Author))
+        {
+            sp.Children.Add(new TextBlock
+            {
+                Text = "作者 " + pl.Author,
+                Style = (Style)FindResource("T3"),
+                Margin = new Thickness(0, 4, 0, 0),
+            });
+        }
+
+        if (pl.Permissions.Length > 0)
+        {
+            sp.Children.Add(new TextBlock
+            {
+                Text = "权限：" + string.Join(" · ", pl.Permissions),
+                Style = (Style)FindResource("T3"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0),
+            });
+        }
+
+        if (pl.State == PluginState.Failed && !string.IsNullOrWhiteSpace(pl.Error))
+        {
+            sp.Children.Add(new TextBlock
+            {
+                Text = "原因：" + pl.Error,
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromArgb(230, 232, 128, 120)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+        }
+
+        // 插件自带设置面板（延迟构建，异常不影响宿主）
+        if (pl.Settings is { } sec && pl.IsLoaded)
+        {
+            try
+            {
+                var panel = sec.Build();
+                if (panel != null)
+                {
+                    panel.Margin = new Thickness(0, 10, 0, 0);
+                    sp.Children.Add(new Border
+                    {
+                        BorderThickness = new Thickness(0, 1, 0, 0),
+                        BorderBrush = new SolidColorBrush(Themes.Outline()),
+                        Padding = new Thickness(0, 10, 0, 0),
+                        Child = panel,
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                sp.Children.Add(new TextBlock
+                {
+                    Text = "设置面板构建失败：" + ex.Message,
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.FromArgb(230, 232, 128, 120)),
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 8, 0, 0),
+                });
+            }
+        }
+
+        // 失败插件给出日志路径提示
+        if (pl.State == PluginState.Failed)
+        {
+            sp.Children.Add(new TextBlock
+            {
+                Text = $"日志：data\\plugins\\{pl.Id}\\plugin.log",
+                Style = (Style)FindResource("T3"),
+                Margin = new Thickness(0, 4, 0, 0),
+            });
+        }
+
+        return new Border { Style = (Style)FindResource("Card"), Width = 590, Child = sp };
     }
 
     /// <summary>新增一个设置分组：标题 + 分隔线 + 卡片容器，返回卡片容器。</summary>

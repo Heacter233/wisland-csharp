@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>HelloPlugin</AssemblyName>
+    <RootNamespace>HelloPlugin</RootNamespace>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <!-- 插件不生成 exe -->
+    <OutputType>Library</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      引用宿主工程以使用插件契约（IWislandPlugin / PluginMessage / Themes 等）。
+      Private="false" 很关键：不要把 Wisland.exe 复制到插件目录，
+      运行时由宿主的默认 AssemblyLoadContext 提供，保证类型是同一份。
+    -->
+    <ProjectReference Include="..\..\WislandCSharp\Wisland.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>

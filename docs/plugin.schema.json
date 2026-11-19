@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Wisland 插件清单",
+  "description": "plugins/<id>/plugin.json —— 宿主据此识别、校验与展示插件。规范见 docs/plugins.md",
+  "type": "object",
+  "required": ["id", "name", "entry", "assembly", "permissions"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$",
+      "description": "唯一标识；必须与插件目录名一致"
+    },
+    "name": { "type": "string", "minLength": 1, "description": "显示名" },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-.][0-9A-Za-z.]+)?$",
+      "default": "0.0.0"
+    },
+    "author": { "type": "string" },
+    "description": { "type": "string" },
+    "entry": {
+      "type": "string",
+      "minLength": 1,
+      "description": "入口类型全名，需实现 IWislandPlugin 且有公开无参构造函数"
+    },
+    "assembly": {
+      "type": "string",
+      "pattern": "^[^/\\\\:]+\\.dll$",
+      "description": "程序集文件名（不能含路径）"
+    },
+    "minHostVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$",
+      "description": "要求的最低宿主版本"
+    },
+    "permissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "messages.push",
+          "ui.settings",
+          "ui.compact",
+          "network",
+          "network.local",
+          "process.start",
+          "clipboard.read",
+          "files.user",
+          "notify.image",
+          "system.info"
+        ]
+      },
+      "description": "声明使用的权限，未声明则对应宿主 API 被拒绝"
+    },
+    "homepage": { "type": "string" }
+  }
+}

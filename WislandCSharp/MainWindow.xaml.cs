@@ -555,6 +555,29 @@ public partial class MainWindow : Window
             };
         });
 
+        // 插件加载：扫描 plugins/ 目录（在 hooks 之后，保证插件能拿到 RequestExpand 等回调）
+        Try("plugins", () =>
+        {
+            if (!ServiceHub.Config.Get("plugins.enabled", true))
+            {
+                App.DebugNote("plugins: 已禁用（plugins.enabled=false）");
+                return;
+            }
+
+            var results = Plugins.PluginLoader.LoadAll(
+                AppContext.BaseDirectory,
+                ServiceHub.Config.DataDir,
+                ServiceHub.Config);
+
+            foreach (var r in results)
+            {
+                if (r.State == Plugins.PluginState.Failed)
+                    App.LogCrash($"plugin [{r.Manifest?.Id ?? System.IO.Path.GetFileName(r.Directory)}]", new Exception(r.Error));
+            }
+
+            App.DebugNote($"plugins: {results.Count} 个目录，成功 {results.Count(x => x.State == Plugins.PluginState.Loaded)}");
+        });
+
         Try("debugpage", () =>
         {
             var arg = Environment.GetCommandLineArgs()
