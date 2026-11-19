@@ -122,9 +122,9 @@ ServiceHub.Inbox.Push(new PluginMessage {
 - 内置来源**默认全部关闭**，想要哪一路响就单独打开
 - 提示音默认用**程序自带的 `Resources/sound.wav`**（设置里可选系统提示音/蜂鸣等，或指定自定义 `.wav`）；
   有全局冷却（默认 3 秒）避免连续轰炸
-- `.wav` 走 winmm 播放（不阻塞 UI、兼容性最好），其他格式走 WPF MediaPlayer
+- 播放统一走 WPF `MediaPlayer`（WASAPI 端点、有独立音频会话）；失败时才降级到 winmm `PlaySound` 与系统提示音
 - 设置页「消息提示音 → 试听」可直接验证；调试模式（`WISLAND_DEBUG=1`）会记录
-  `winmm 播放 ... 端点电平（峰值）=x.xxx`，值 >0 表示音频确实送到了默认输出设备
+  `MediaPlayer 已打开（x.x 秒）` 与 `播放结束`
 - **插件必须声明 `notify.sound` 才可能发声**，未声明的插件来源即使开关打开也不响（宿主记日志）
 
 ### 6. 系统通知统一进 Inbox

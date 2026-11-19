@@ -211,14 +211,8 @@ public sealed class NotifySoundService
             _player = null;
             try { old?.Close(); } catch { }
 
-            // .wav 走 winmm PlaySound：稳定、开销小，实测能出声（MediaPlayer 在部分机器上
-            // 会"打开成功、播放结束"但实际没有交给音频端点）。非 wav 才用 MediaPlayer。
-            if (path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) &&
-                PlayWavNative(path))
-            {
-                return;
-            }
-
+            // 统一走 MediaPlayer：WASAPI 端点、有独立音频会话，用户实测能正常听到。
+            // （winmm PlaySound 在部分机器上会"返回成功但完全无声"，因此只作为失败兜底。）
             var audio = ServiceHub.Audio;
             if (audio != null)
                 App.DebugNote($"sound: 系统音量 {audio.Volume * 100:0}% · 静音={audio.Muted}");
@@ -229,7 +223,8 @@ public sealed class NotifySoundService
                 App.DebugNote("sound: MediaPlayer 已打开（" + (p.NaturalDuration.HasTimeSpan
                     ? p.NaturalDuration.TimeSpan.TotalSeconds.ToString("0.0") + " 秒）"
                     : "时长未知）"));
-                TrackPeak(p);
+                // 保险：Open 是异步的，某些机器上过早 Play 会被忽略 —— 打开完成后再补一次
+                try { if (p.Position == TimeSpan.Zero) p.Play(); } catch { }
             };
             p.MediaEnded += (_, _) =>
             {
@@ -239,7 +234,8 @@ public sealed class NotifySoundService
             p.MediaFailed += (_, e) =>
             {
                 App.DebugNote("sound: MediaPlayer 失败 —— " + e.ErrorException?.Message);
-                // 兜底：退回系统提示音
+                // 兜底链路：先试 winmm，再退系统提示音
+                if (path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) && PlayWavNative(path)) return;
                 try { SystemSounds.Asterisk.Play(); } catch { }
             };
 
@@ -279,21 +275,7 @@ public sealed class NotifySoundService
                 return true;   // 已用兜底声音发声，不再走 MediaPlayer
             }
 
-            // 日志与验证放后台，避免卡住 UI（岛的所有绘制都在 UI 线程）
-            _ = Task.Run(() =>
-            {
-                try
-                {
-                    var audio = ServiceHub.Audio;
-                    if (audio != null)
-                        App.DebugNote($"sound: 系统音量 {audio.Volume * 100:0}% · 静音={audio.Muted}");
-
-                    var during = SampleEndpointPeak(1500);
-                    App.DebugNote($"sound: winmm 播放 {Path.GetFileName(path)} · 端点电平（峰值）={during:0.000}"
-                                  + (during > 0.005 ? "（有声音输出）" : "（没有声音输出，请检查默认输出设备）"));
-                }
-                catch (Exception ex) { App.DebugNote("sound: 电平采样异常 —— " + ex.Message); }
-            });
+            App.DebugNote("sound: winmm 兜底播放 " + Path.GetFileName(path));
             return true;
         }
         catch (Exception ex)
@@ -303,38 +285,9 @@ public sealed class NotifySoundService
         }
     }
 
-    private static double SampleEndpointPeak(int ms)
-    {
-        double max = 0;
-        var step = 30;
-        for (var t = 0; t < ms; t += step)
-        {
-            try { max = Math.Max(max, ServiceHub.Audio?.Peak ?? 0); } catch { }
-            System.Threading.Thread.Sleep(step);
-        }
-        return max;
-    }
 
-    /// <summary>播放期间采样系统端点峰值，用来验证"确实有声音输出"（0 表示没有任何声音）。</summary>
-    private static void TrackPeak(MediaPlayer p)
-    {
-        _ = Task.Run(async () =>
-        {
-            double max = 0;
-            try
-            {
-                var total = p.NaturalDuration.HasTimeSpan ? p.NaturalDuration.TimeSpan.TotalMilliseconds : 3000;
-                var steps = (int)Math.Clamp(total / 100, 1, 40);
-                for (var i = 0; i < steps; i++)
-                {
-                    await Task.Delay(100).ConfigureAwait(false);
-                    try { max = Math.Max(max, ServiceHub.Audio?.Peak ?? 0); } catch { }
-                }
-            }
-            catch { }
-            App.DebugNote($"sound: 端点峰值 {max:0.000}（0.000 表示没有声音输出）");
-        });
-    }
+
+
 
     /// <summary>设置页列出可配置的来源：内置三个 + 声明了 notify.sound 的插件。</summary>
     public IReadOnlyList<(string Source, string Name, bool BuiltIn)> Sources()
