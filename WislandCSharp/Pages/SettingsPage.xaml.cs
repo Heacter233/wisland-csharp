@@ -817,7 +817,11 @@ public partial class SettingsPage : UserControl
             Style = (Style)Application.Current.FindResource("PillBtn"),
             ToolTip = "试听当前选择的提示音",
         };
-        play.Click += (_, _) => ServiceHub.NotifySound.Preview();
+        play.Click += (_, _) =>
+        {
+            ServiceHub.NotifySound.Preview();
+            HintText.Text = "已播放提示音；若没听到，请检查系统默认输出设备与音量合成器";
+        };
         row.Children.Add(play);
         body.Children.Add(row);
         return card;

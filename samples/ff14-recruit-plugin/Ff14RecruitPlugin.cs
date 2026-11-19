@@ -1017,7 +1017,8 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(48) });
 
-        var title = Text($"{h.Category}：{h.Duty}", "T2", 12, FontWeights.SemiBold);
+        // 第一行：类别：副本 · 服务器：xxx
+        var title = Text($"{h.Category}：{h.Duty} · 服务器：{h.Server}", "T2", 12, FontWeights.SemiBold);
         title.TextTrimming = TextTrimming.CharacterEllipsis;
         Grid.SetColumn(title, 0);
         head.Children.Add(title);
@@ -1029,14 +1030,14 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         head.Children.Add(time);
         box.Children.Add(head);
 
-        // 第二行：服务器 + 玩家 + 装等/位置/剩余
-        var meta = new List<string> { h.Server };
-        if (!string.IsNullOrWhiteSpace(h.Player)) meta.Add($"{h.Player}@{h.HomeWorld}");
+        // 第二行：玩家 + 装等/位置/剩余
+        var meta = new List<string>();
+        if (!string.IsNullOrWhiteSpace(h.Player)) meta.Add($"玩家：{h.Player}@{h.HomeWorld}");
         if (h.ItemLevel > 0) meta.Add($"装等{h.ItemLevel}");
         meta.Add($"位置{h.SlotsFilled}/{h.SlotsAvailable}");
         meta.Add($"剩余{FormatTimeLeft(h.TimeLeftSeconds)}");
         if (!h.CrossWorld) meta.Add("本地");
-        box.Children.Add(Text(string.Join(" · ", meta), "T3", 10.5));
+        if (meta.Count > 0) box.Children.Add(Text(string.Join(" · ", meta), "T3", 10.5));
 
         // 第三行：描述（最多两行）
         if (!string.IsNullOrWhiteSpace(h.Description))

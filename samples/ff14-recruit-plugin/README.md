@@ -2,7 +2,7 @@
 
 监控 FF14 招募板关键词，发现**新出现**的招募时推送到灵动岛消息页（可选提示音）。
 
-移植自同作者的 NapCat 插件 [`napcat-plugin-ff14-recruit`](../../../../Dev发布/napcat-plugin-ff14-recruit)
+作者：Heacter。移植自同作者的 NapCat 插件 [`napcat-plugin-ff14-recruit`](../../../../Dev发布/napcat-plugin-ff14-recruit)
 （原版运行在 NapCat/QQ 机器人里；这里改成灵动岛插件，推送到消息页而不是群消息）。
 
 ## 功能
