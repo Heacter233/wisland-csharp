@@ -73,6 +73,13 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
     private StackPanel? _hitsPanel;
     private WrapPanel? _kwPanel;
 
+    // ---------------- 搜索页 ----------------
+    private readonly List<Hit> _searchResults = new();
+    private TextBox? _searchBox;
+    private StackPanel? _searchPanel;
+    private TextBlock? _searchStatus;
+    private bool _searching;
+
     private sealed class Listing
     {
         public string Id = "";
@@ -151,6 +158,16 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
             Glyph = "\uE8BD",
             Height = 470,
             Build = BuildPage,
+        });
+
+        // 第二个页面：自定义关键词搜索（结果同样是卡片列表）
+        context.RegisterPage(new PluginPageDescriptor
+        {
+            Key = PluginId + "-search",
+            Title = "招募搜索",
+            Glyph = "\uE721",
+            Height = 470,
+            Build = BuildSearchPage,
         });
 
         var kws = Keywords();
@@ -1001,7 +1018,7 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
     }
 
     /// <summary>一条命中记录的卡片：完整信息（类别/副本、发布服务器、玩家、装等、位置、剩余、描述）。</summary>
-    private FrameworkElement BuildHitCard(Hit h)
+    private FrameworkElement BuildHitCard(Hit h, bool showTime = true)
     {
         var card = new Border
         {
@@ -1023,11 +1040,14 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         Grid.SetColumn(title, 0);
         head.Children.Add(title);
 
-        var time = Text(h.Time.ToString("HH:mm"), "T3", 10.5);
-        time.FontFamily = (FontFamily)SafeResource("NumFont", new FontFamily("Segoe UI"));
-        time.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(time, 1);
-        head.Children.Add(time);
+        if (showTime)
+        {
+            var time = Text(h.Time.ToString("HH:mm"), "T3", 10.5);
+            time.FontFamily = (FontFamily)SafeResource("NumFont", new FontFamily("Segoe UI"));
+            time.HorizontalAlignment = HorizontalAlignment.Right;
+            Grid.SetColumn(time, 1);
+            head.Children.Add(time);
+        }
         box.Children.Add(head);
 
         // 第二行：玩家 + 装等/位置/剩余
@@ -1052,6 +1072,152 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
 
         card.Child = box;
         return card;
+    }
+
+    // ---------------- 搜索页 ----------------
+
+    private FrameworkElement BuildSearchPage()
+    {
+        var root = new StackPanel { Margin = new Thickness(4, 4, 4, 0) };
+
+        var head = new StackPanel { Orientation = Orientation.Horizontal };
+        head.Children.Add(Text("招募搜索", "T1", 15, FontWeights.SemiBold));
+        head.Children.Add(Text("  输入关键词搜索当前招募板（仅国服，最多 30 条）", "T3", 11,
+            margin: new Thickness(8, 2, 0, 0)));
+        root.Children.Add(head);
+
+        // 搜索行
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
+        _searchBox = new TextBox
+        {
+            Width = 420,
+            Height = 30,
+            FontSize = 12,
+            Text = Cfg("search_keyword", ""),
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        _searchBox.SetResourceReference(FrameworkElement.StyleProperty, "AppBox");
+        _searchBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) RunSearch();
+        };
+        row.Children.Add(_searchBox);
+
+        var go = SmallButton("搜索", 8);
+        go.Click += (_, _) => RunSearch();
+        row.Children.Add(go);
+
+        var clear = SmallButton("清空", 6);
+        clear.Click += (_, _) =>
+        {
+            if (_searchBox != null) _searchBox.Text = "";
+            _searchResults.Clear();
+            RefreshSearchUi();
+            if (_searchStatus != null) _searchStatus.Text = "输入关键词后回车或点「搜索」";
+            _ctx?.RequestRepaint();
+        };
+        row.Children.Add(clear);
+        root.Children.Add(row);
+
+        _searchStatus = Text("输入关键词后回车或点「搜索」", "T3", 11, margin: new Thickness(0, 8, 0, 0));
+        root.Children.Add(_searchStatus);
+
+        _searchPanel = new StackPanel { Margin = new Thickness(0, 8, 4, 0) };
+        var scroll = new ScrollViewer
+        {
+            MaxHeight = 300,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Padding = new Thickness(0),
+        };
+        scroll.SetResourceReference(FrameworkElement.StyleProperty, "AppScroll");
+        scroll.Content = _searchPanel;
+        root.Children.Add(scroll);
+
+        RefreshSearchUi();
+        return root;
+    }
+
+    /// <summary>执行一次自定义搜索（页面按钮 / 回车触发）。</summary>
+    private void RunSearch()
+    {
+        if (_ctx == null || _searchBox == null || _searching) return;
+        var kw = (_searchBox.Text ?? "").Trim();
+        if (kw.Length == 0)
+        {
+            if (_searchStatus != null) _searchStatus.Text = "请输入搜索内容";
+            return;
+        }
+        _ = RunSearchAsync(kw);
+    }
+
+    private async Task RunSearchAsync(string keyword)
+    {
+        if (_ctx == null) return;
+        _searching = true;
+        try
+        {
+            if (_searchStatus != null) _searchStatus.Text = $"正在搜索「{keyword}」…";
+            _ctx.RequestRepaint();
+
+            // 最多翻 2 页（40 条），过滤国际服后取前 30 条
+            var fetched = await FetchAsync(keyword, 2, _ctx.ShutdownToken);
+            var cn = fetched.Where(l => _worlds.ContainsKey(l.CreatedWorldId)).ToList();
+            var taken = cn.Take(30).ToList();
+
+            _searchResults.Clear();
+            foreach (var l in taken) _searchResults.Add(ToListingHit(l));
+
+            try { _ctx.Config.Set("search_keyword", keyword); } catch { }
+
+            if (_searchStatus != null)
+            {
+                _searchStatus.Text = $"「{keyword}」· 国服 {cn.Count} 条"
+                    + (fetched.Count > cn.Count ? $"（过滤国际服 {fetched.Count - cn.Count}）" : "")
+                    + $" · 显示 {taken.Count} 条";
+            }
+            RefreshSearchUi();
+            _ctx.RequestRepaint();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (_searchStatus != null) _searchStatus.Text = "搜索失败：" + ex.Message;
+            _ctx.Log.Warn("搜索失败：" + ex.Message);
+        }
+        finally
+        {
+            _searching = false;
+        }
+    }
+
+    private Hit ToListingHit(Listing l) => new Hit
+    {
+        Time = DateTime.Now,
+        Keyword = "",
+        Category = CategoryName(l.CategoryId),
+        Duty = DutyName(l.CategoryId, l.DutyId),
+        Server = ServerDisplay(l),
+        Player = l.Player,
+        HomeWorld = World(l.HomeWorldId).Name,
+        ItemLevel = l.MinItemLevel,
+        SlotsFilled = l.SlotsFilled,
+        SlotsAvailable = l.SlotsAvailable,
+        TimeLeftSeconds = l.TimeLeftSeconds,
+        Description = (l.Description ?? "").Trim().Replace("\r", " ").Replace("\n", " "),
+        CrossWorld = l.CrossWorld,
+    };
+
+    private void RefreshSearchUi()
+    {
+        if (_searchPanel == null) return;
+        _searchPanel.Children.Clear();
+        if (_searchResults.Count == 0)
+        {
+            _searchPanel.Children.Add(Text("暂无结果", "T3", 11));
+            return;
+        }
+        foreach (var h in _searchResults) _searchPanel.Children.Add(BuildHitCard(h, showTime: false));
     }
 
     // ---------------- 设置面板 ----------------

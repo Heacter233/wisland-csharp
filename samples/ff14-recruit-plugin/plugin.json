@@ -1,9 +1,9 @@
 {
   "id": "ff14-recruit",
   "name": "FF14 招募监控",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Heacter",
-  "description": "监控 FF14 招募板关键词，发现新招募时推送到灵动岛消息页（可选提示音）",
+  "description": "监控 FF14 招募板关键词并推送到消息页；另带自定义招募搜索页（可选提示音）",
   "entry": "Ff14RecruitPlugin.Ff14RecruitPlugin",
   "assembly": "Ff14RecruitPlugin.dll",
   "minHostVersion": "0.2.0",

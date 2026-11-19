@@ -8,7 +8,7 @@
 | [`hello-plugin`](hello-plugin) | 示例插件 | 最小骨架：注册设置面板、注册页面、推送消息、宿主托管定时器 |
 | [`stock-plugin`](stock-plugin) | 股票行情 | 定时拉取网络数据、磁盘缓存、涨跌提醒、自绘走势图（`OnRender`）、列表增删 |
 | [`clash-plugin`](clash-plugin) | Clash 控制 | 只访问本机（`network.local`）、HTTP + 命名管道双通道、分段控件、可点击标签 |
-| [`ff14-recruit-plugin`](ff14-recruit-plugin) | FF14 招募监控 | 关键词轮换轮询、快照差分去重、屏蔽名单/屏蔽词/休息时段、本地静态表（CSV/JSON）、`notify.sound` 提示音权限 |
+| [`ff14-recruit-plugin`](ff14-recruit-plugin) | FF14 招募监控 | 关键词轮换轮询、快照差分去重、屏蔽名单/屏蔽词/休息时段、本地静态表（CSV/JSON）、卡片式结果列表、第二个自定义搜索页、`notify.sound` 提示音权限 |
 | [`mock`](mock) | 测试替身 | 无 Clash 环境下验证 Clash 插件：HTTP mock 与命名管道 mock |
 
 ## 构建与安装
