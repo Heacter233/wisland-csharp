@@ -438,6 +438,17 @@ public class LiveService : ILiveService, IDisposable
         if (t.StartsWith("[") && t.EndsWith("]")) return "";
         if (t.StartsWith("(") && t.EndsWith(")")) return "";
         if (t.Trim('♪', ' ', '。', '.', '、').Length == 0) return "";
+
+        // Whisper 在纯音乐/静音上的常见幻觉：网址、同一句反复、单字重复
+        if (t.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ||
+            t.Contains("http://", StringComparison.OrdinalIgnoreCase) ||
+            t.Contains("https://", StringComparison.OrdinalIgnoreCase))
+            return "";
+
+        var words = t.Split(new[] { ' ', '\u3000' }, StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length >= 3 && words.Distinct().Count() == 1) return "";
+        if (t.Length >= 30 && t.Distinct().Count() <= 3) return "";
+
         return t;
     }
 

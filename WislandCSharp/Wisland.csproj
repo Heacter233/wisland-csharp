@@ -31,6 +31,7 @@
     <!-- 实时字幕：音频捕获（WASAPI 回环 / 麦克风）+ 离线 ASR -->
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
   </ItemGroup>
 

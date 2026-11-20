@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -396,25 +397,40 @@ public sealed class WhisperAsr : IDisposable
                 _useGpu = false;
                 break;
             case "cuda":
-                order.Add(RuntimeLibrary.Cuda12);
-                order.Add(RuntimeLibrary.Cuda);
+                // CUDA 运行库没有随包（+400MB）；不存在时退到 Vulkan，避免选了 CUDA 直接加载失败
+                if (RuntimeDirExists("cuda12") || RuntimeDirExists("cuda"))
+                {
+                    order.Add(RuntimeLibrary.Cuda12);
+                    order.Add(RuntimeLibrary.Cuda);
+                }
                 order.Add(RuntimeLibrary.Vulkan);
                 order.Add(RuntimeLibrary.Cpu);
                 _useGpu = true;
                 break;
             case "vulkan":
-                order.Add(RuntimeLibrary.Vulkan);
+                if (RuntimeDirExists("vulkan")) order.Add(RuntimeLibrary.Vulkan);
                 order.Add(RuntimeLibrary.Cpu);
-                _useGpu = true;
+                _useGpu = order.Count > 1;   // 只有 CPU 时不启用 GPU 标志
                 break;
             default: // auto
-                order.Add(RuntimeLibrary.Vulkan);
+                if (RuntimeDirExists("vulkan")) order.Add(RuntimeLibrary.Vulkan);
                 order.Add(RuntimeLibrary.Cpu);
-                _useGpu = true;
+                _useGpu = order.Count > 1;
                 break;
         }
         RuntimeOptions.RuntimeLibraryOrder = order;
         Debug.WriteLine($"[Whisper] 运行库顺序: {string.Join(",", order)}  UseGpu={_useGpu}");
+    }
+
+    /// <summary>输出目录里是否存在某个后端运行库目录（如 runtimes/vulkan/win-x64）。</summary>
+    private static bool RuntimeDirExists(string backend)
+    {
+        try
+        {
+            var dir = Path.Combine(AppContext.BaseDirectory, "runtimes", backend, "win-x64");
+            return Directory.Exists(dir) && Directory.EnumerateFiles(dir, "*whisper*.dll").Any();
+        }
+        catch { return false; }
     }
 
     /// <summary>识别线程数（0 = 自动：核心数 - 1）。</summary>
