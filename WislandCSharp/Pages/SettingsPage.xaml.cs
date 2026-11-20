@@ -226,6 +226,22 @@ public partial class SettingsPage : UserControl
             new[] { "简体中文", "繁体中文", "英语" },
             cfg.Get("live.translate.target", "zh-CN")));
 
+        AddCard(liveSec, CardToggle("自动增益（AGC）", "live.capture.agc",
+            cfg.Get("live.capture.agc", true),
+            "回环捕获电平偏低，开启后自动拉到约 -20 dBFS；关掉后只有很大的声音才触发。改动在重启实时字幕后生效"));
+
+        AddCard(liveSec, CardText("手动增益", "live.capture.gain",
+            cfg.Get("live.capture.gain", 1.0).ToString("0.###"),
+            "0.1~16，1.0 为原始电平；开了 AGC 一般不用改（与 AGC 叠加）"));
+
+        AddCard(liveSec, CardToggle("自适应语音阈值", "live.vad.adaptive",
+            cfg.Get("live.vad.adaptive", true),
+            "按环境噪声底动态调整触发阈值，安静环境不会漏句；关掉则只用下面的固定阈值"));
+
+        AddCard(liveSec, CardText("语音阈值", "live.vad.threshold",
+            cfg.Get("live.vad.threshold", 0.006).ToString("0.####"),
+            "0.003~0.015，越大越难触发；自适应开启时作为下限"));
+
         // ===== 热键设置 =====
         var hotkey = AddSection("热键设置", "格式：修饰键+键名，如 Ctrl+Alt+W；改完立即重新注册");
 

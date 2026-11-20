@@ -157,6 +157,8 @@ public class LiveService : ILiveService, IDisposable
             _capture = new AudioCapture();
             _capture.Level += (_, v) => Level?.Invoke(this, v);
             _capture.Samples += OnSamples;
+            _capture.AgcEnabled = Cfg("live.capture.agc", true);
+            _capture.ManualGain = (float)Math.Clamp(Cfg("live.capture.gain", 1.0), 0.1, 16.0);
 
             var source = Cfg("live.audio.source", _audioSource);
             var deviceIdx = -1;
@@ -255,7 +257,9 @@ public class LiveService : ILiveService, IDisposable
 
     private async Task VadLoopAsync(CancellationToken ct)
     {
-        var threshold = Math.Max(0.001, Cfg("live.vad.threshold", 0.012));
+        var threshold = Math.Max(0.001, Cfg("live.vad.threshold", 0.006));
+        var adaptive = Cfg("live.vad.adaptive", true);
+        var noiseFloor = 0.002;
         var silenceMs = Math.Max(150, Cfg("live.vad.silence_ms", 450));
         var minSpeechMs = Math.Max(120, Cfg("live.vad.min_speech_ms", 300));
         var maxSegmentMs = Math.Max(2000, Cfg("live.vad.max_segment_ms", 12000));
@@ -266,13 +270,22 @@ public class LiveService : ILiveService, IDisposable
             {
                 var cutStart = -1;
                 var cutEnd = -1;
+                float[]? segment = null;
+                double cutMs = 0;
 
                 lock (_buffer)
                 {
                     while (_framePos + FrameSize <= _buffer.Count)
                     {
                         var rms = Rms(_buffer, _framePos, FrameSize);
-                        var voice = rms >= threshold;
+                        // 自适应阈值：跟着环境噪声底走，安静环境不会因为阈值太高而漏句
+                        var thr = adaptive ? Math.Max(threshold, noiseFloor * 2.5) : threshold;
+                        var voice = rms >= thr;
+                        if (!voice)
+                        {
+                            noiseFloor = noiseFloor * 0.995 + rms * 0.005;
+                            noiseFloor = Math.Min(noiseFloor, threshold * 0.8);
+                        }
                         var now = DateTime.UtcNow;
 
                         if (voice)
@@ -281,6 +294,7 @@ public class LiveService : ILiveService, IDisposable
                             {
                                 _speechFrom = _framePos;
                                 _speechStartAt = now;
+                                App.DebugNote($"[VAD] 语音开始 rms={rms:0.0000} thr={thr:0.0000} 噪声底={noiseFloor:0.0000}");
                                 Partial?.Invoke(this, "…");
                             }
                             _lastVoiceAt = now;
@@ -306,26 +320,37 @@ public class LiveService : ILiveService, IDisposable
                         }
                     }
 
+                    // 关键：必须先用「旧索引」把片段取出来，再裁剪缓冲。
+                    // 之前先 RemoveRange 再按旧索引切片，导致每句只剩不到一帧（40ms）。
+                    if (cutStart >= 0 && cutEnd > cutStart)
+                    {
+                        var from = Math.Max(0, Math.Min(cutStart, _buffer.Count));
+                        var to = Math.Max(from, Math.Min(cutEnd, _buffer.Count));
+                        if (to > from)
+                        {
+                            segment = _buffer.GetRange(from, to - from).ToArray();
+                            cutMs = segment.Length * 1000.0 / SampleRate;
+                        }
+
+                        var drop = Math.Min(cutEnd, _buffer.Count);
+                        if (drop > 0)
+                        {
+                            _buffer.RemoveRange(0, drop);
+                            _framePos = Math.Max(0, _framePos - drop);
+                        }
+                    }
                     // 空闲时裁掉已处理数据，避免缓冲无限增长
-                    if (_speechFrom < 0 && _framePos > SampleRate * 2)
+                    else if (_speechFrom < 0 && _framePos > SampleRate * 2)
                     {
                         _buffer.RemoveRange(0, _framePos);
                         _framePos = 0;
                     }
                 }
 
-                if (cutStart >= 0 && cutEnd > cutStart)
+                if (segment != null)
                 {
-                    float[] segment;
-                    lock (_buffer)
-                    {
-                        var from = Math.Max(0, cutStart);
-                        var to = Math.Min(_buffer.Count, cutEnd);
-                        segment = _buffer.GetRange(from, to - from).ToArray();
-                    }
-
-                    var ms = segment.Length * 1000.0 / SampleRate;
-                    if (ms >= minSpeechMs) await HandleSegmentAsync(segment, ct);
+                    App.DebugNote($"[VAD] 切句 {cutMs:0}ms → 识别");
+                    if (cutMs >= minSpeechMs) await HandleSegmentAsync(segment, ct);
                     else Partial?.Invoke(this, "");
                 }
             }
@@ -361,6 +386,7 @@ public class LiveService : ILiveService, IDisposable
             var language = Cfg("live.asr.language", "auto");
             var text = await _asr.TranscribeAsync(samples, language, ct);
             text = Clean(text);
+            App.DebugNote($"[ASR] {samples.Length * 1000 / SampleRate}ms → \"{text}\"");
             if (text.Length == 0) { Partial?.Invoke(this, ""); return; }
 
             Segment?.Invoke(this, (sid, text));

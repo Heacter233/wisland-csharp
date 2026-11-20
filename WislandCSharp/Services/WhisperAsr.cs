@@ -305,6 +305,7 @@ public sealed class WhisperAsr : IDisposable
     {
         if (samples.Length < TargetRate / 4) return "";   // 少于 250ms 不值得识别
 
+        samples = NormalizeForWhisper(samples);
         var factory = EnsureFactory(modelName: null);     // 复用已加载模型
         if (factory == null) return "";
 
@@ -375,6 +376,20 @@ public sealed class WhisperAsr : IDisposable
             if (_loadedModel == model) { _currentModel = model; return; }
             _currentModel = model;
         }
+    }
+
+    /// <summary>峰值归一化：AGC 之后再做一层保险，极安静的片段也能被模型识别。</summary>
+    private static float[] NormalizeForWhisper(float[] samples)
+    {
+        if (samples.Length == 0) return samples;
+        var peak = 0f;
+        foreach (var s in samples) peak = Math.Max(peak, Math.Abs(s));
+        if (peak < 1e-4f) return samples;
+        var gain = Math.Min(0.9f / peak, 8f);
+        if (gain <= 1.01f) return samples;
+        var outp = new float[samples.Length];
+        for (var i = 0; i < samples.Length; i++) outp[i] = Math.Clamp(samples[i] * gain, -1f, 1f);
+        return outp;
     }
 
     private static MemoryStream BuildWav(float[] samples)

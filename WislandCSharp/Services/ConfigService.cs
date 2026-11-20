@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 
@@ -93,15 +94,20 @@ public class ConfigService : IConfigService
         {
             ["models_dir"] = "models",
             ["audio"] = new Dictionary<string, object?> { ["source"] = "loopback", ["device"] = "", ["block_ms"] = 80 },
+            ["capture"] = new Dictionary<string, object?>
+            {
+                // 回环捕获电平偏低，默认开自动增益；手动增益用于特殊情况
+                ["agc"] = true, ["gain"] = 1.0,
+            },
+            ["vad"] = new Dictionary<string, object?>
+            {
+                ["threshold"] = 0.006, ["adaptive"] = true, ["migrated"] = false,
+                ["silence_ms"] = 450, ["min_speech_ms"] = 300, ["max_segment_ms"] = 6000,
+            },
             ["asr"] = new Dictionary<string, object?>
             {
                 // 模型：tiny / base / small；语言：auto / ja / en / zh
                 ["model"] = "auto", ["language"] = "auto",
-            },
-            ["vad"] = new Dictionary<string, object?>
-            {
-                ["threshold"] = 0.012, ["silence_ms"] = 450,
-                ["min_speech_ms"] = 300, ["max_segment_ms"] = 6000,
             },
             ["translate"] = new Dictionary<string, object?>
             {
@@ -135,6 +141,32 @@ public class ConfigService : IConfigService
             }
         }
         LoadFromDisk();
+        MigrateLiveVadDefaults();
+    }
+
+    /// <summary>
+    /// 旧配置迁移：早期版本 VAD 只有固定阈值 0.012，没有自适应开关。
+    /// 升级后把这类配置改成新的默认（0.006 + 自适应），否则安静音频仍会漏句。
+    /// 用户手动改过的阈值（不是 0.012）不动。
+    /// </summary>
+    private void MigrateLiveVadDefaults()
+    {
+        try
+        {
+            // 一次性迁移标记：老配置没有这个键
+            if (Get("live.vad.migrated", false)) return;
+
+            // 老默认是固定阈值 0.012；升级成 0.006 + 自适应
+            if (Math.Abs(Get("live.vad.threshold", 0.0) - 0.012) < 1e-6)
+            {
+                Set("live.vad.threshold", 0.006);
+                Set("live.vad.adaptive", true);
+            }
+            Set("live.vad.migrated", true);
+            Save();
+            Debug.WriteLine("[Config] 已把旧的 VAD 固定阈值升级为自适应默认值");
+        }
+        catch (Exception ex) { Debug.WriteLine("[Config] VAD 迁移失败: " + ex.Message); }
     }
 
     /// <summary>向上最多 5 级查找旧版 wisland 的 config.json（bin/Debug/net8.0-windows → 项目根）。</summary>

@@ -27,6 +27,18 @@ public sealed class AudioCapture : IDisposable
     private int _channels = 1;
     private bool _isFloat;
 
+    // 自动增益：WASAPI 回环抓到的电平通常只有音源本身的 1/3~1/10，
+    // 不归一化的话 VAD 会判成静音、Whisper 也识别不出来。
+    private const float AgcTargetRms = 0.10f;   // ≈ -20 dBFS
+    private const float AgcMaxGain = 16f;
+    private float _agcGain = 1f;
+
+    /// <summary>自动增益（默认开）：把语音电平拉到约 -20 dBFS。</summary>
+    public bool AgcEnabled { get; set; } = true;
+
+    /// <summary>手动增益（1.0 = 不放大），与 AGC 叠加。</summary>
+    public float ManualGain { get; set; } = 1f;
+
     public bool Running { get; private set; }
 
     /// <summary>启动捕获。source = "loopback" | "mic"；deviceIndex &lt; 0 表示默认设备。</summary>
@@ -128,11 +140,31 @@ public sealed class AudioCapture : IDisposable
             var pcm16k = _resampler?.Process(mono) ?? mono;
             if (pcm16k.Length == 0) return;
 
-            // 4) 电平（RMS）
-            var sumSq = 0.0;
-            foreach (var s in pcm16k) sumSq += s * s;
-            var rms = (float)Math.Sqrt(sumSq / pcm16k.Length);
-            Level?.Invoke(this, Math.Min(1f, rms * 4f));
+            // 4) 自动增益：把语音电平拉到约 -20 dBFS，低音量系统音频也能识别
+            var rawRms = Rms(pcm16k);
+            if (AgcEnabled && rawRms > 0.0005f)
+            {
+                var desired = Math.Clamp(AgcTargetRms / rawRms, 1f, AgcMaxGain);
+                // 变安静时快速提增益，变响时缓慢回退，避免忽大忽小的"呼吸"
+                var rate = desired > _agcGain ? 0.25f : 0.02f;
+                _agcGain += (desired - _agcGain) * rate;
+            }
+            else if (!AgcEnabled)
+            {
+                _agcGain = 1f;
+            }
+
+            var gain = Math.Clamp(ManualGain, 0.1f, 16f) * _agcGain;
+            if (Math.Abs(gain - 1f) > 0.001f)
+            {
+                for (var i = 0; i < pcm16k.Length; i++)
+                    pcm16k[i] = Math.Clamp(pcm16k[i] * gain, -1f, 1f);
+            }
+
+            // 5) 电平：按 dBFS 映射到 0~1（-60dB..0dB），界面上的条才有参考意义
+            var rms = Rms(pcm16k);
+            var db = 20.0 * Math.Log10(Math.Max(rms, 1e-6));
+            Level?.Invoke(this, (float)Math.Clamp((db + 60.0) / 60.0, 0, 1));
 
             Samples?.Invoke(this, pcm16k);
         }
@@ -140,6 +172,14 @@ public sealed class AudioCapture : IDisposable
         {
             // 单块解析失败不应中断整条链路
         }
+    }
+
+    private static float Rms(float[] samples)
+    {
+        if (samples.Length == 0) return 0;
+        var sum = 0.0;
+        foreach (var s in samples) sum += (double)s * s;
+        return (float)Math.Sqrt(sum / samples.Length);
     }
 
     public void Dispose() => Stop();
