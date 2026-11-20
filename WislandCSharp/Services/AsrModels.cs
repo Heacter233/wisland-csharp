@@ -102,9 +102,9 @@ public static class AsrModels
         },
         new()
         {
-            Key = "anime", Family = FamilyWhisper, DisplayName = "Anime Whisper（日语特化）",
-            Note = "litagin/anime-whisper 微调，动画/日剧台词更准；只针对日语",
-            Languages = "日语", HardwareHint = "体积大、CPU 很慢，强烈建议 GPU",
+            Key = "anime", Family = FamilyWhisper, DisplayName = "Anime Whisper（暂不推荐）",
+            Note = "实测幻听严重、偶尔把日语识别成英文，且体积大/CPU 慢；暂不推荐，优先用 small / turbo",
+            Languages = "日语", HardwareHint = "体积大、CPU 很慢；实测效果不佳",
             RecommendGpu = true, SizeMb = 1449,
             Files = new[]
             {

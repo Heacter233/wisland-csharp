@@ -103,6 +103,59 @@ public static class TranslationEngines
         return s.Trim();
     }
 
+    /// <summary>
+    /// 清洗译文：大模型（尤其 GLM-4-Flash）偶尔会输出「名词解释/例句/注释」，
+    /// 这里去掉标签前缀、并在出现解释性内容前截断，只保留第一段译文。
+    /// </summary>
+    public static string SanitizeTranslation(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        var t = Clean(text);
+
+        // 去掉「译文：」「翻译：」「中文：」等前缀
+        var labels = new[] { "译文：", "译文:", "翻译：", "翻译:", "中文：", "中文:",
+                             "translation:", "translation：", "译：" };
+        foreach (var label in labels)
+        {
+            if (t.StartsWith(label, StringComparison.OrdinalIgnoreCase))
+            {
+                t = t[label.Length..].TrimStart();
+                break;
+            }
+        }
+
+        // 出现解释性段落就截断（保留此前的译文）
+        var markers = new[] { "（注", "(注", "【注", "注：", "注:", "说明：", "解释：", "释义：",
+                             "该词", "这个词", "意思是", "意为", "词性", "例句", "读音", "发音",
+                             "罗马音", "罗马字", "这里指", "在此处表示", "可译为" };
+        foreach (var m in markers)
+        {
+            var idx = t.IndexOf(m, StringComparison.Ordinal);
+            if (idx > 0) { t = t[..idx].TrimEnd(); break; }
+        }
+
+        // 去掉首尾引号（模型偶尔包一层）
+        t = t.Trim().Trim('"', '“', '”', '「', '」').Trim();
+
+        // 多段时只保留第一段（字幕场景不要解释性第二段）
+        var lines = t.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length > 1) t = lines[0].Trim();
+
+        return t;
+    }
+
+    /// <summary>译文里是否混入了"名词解释/词性/例句"这类内容（GLM-4-Flash 偶尔会这样）。</summary>
+    public static bool LooksLikeExplanation(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var markers = new[] { "该词", "这个词", "意思是", "意为", "词性", "例句", "读音", "发音",
+                              "罗马音", "罗马字", "解释", "释义", "（注", "(注", "【注",
+                              "是日语", "日语中", "这里指", "在此处", "可译为" };
+        foreach (var m in markers)
+            if (raw.Contains(m, StringComparison.Ordinal)) return true;
+        return false;
+    }
+
     /// <summary>构造"指令 + 正文"的用户消息（Index / 网页引擎用）。</summary>
     public static string InstructionContent(string text, string sourceLang, string targetLang)
     {
@@ -249,7 +302,11 @@ internal class OpenAiCompatEngine : ITranslationEngine
             TryExtractChunk(data, sb, onDelta);
         }
 
-        return TranslationEngines.Clean(sb.ToString());
+        var rawText = sb.ToString();
+        if (TranslationEngines.LooksLikeExplanation(rawText))
+            throw new InvalidDataException("译文包含解释性内容，换下一个引擎");
+
+        return TranslationEngines.SanitizeTranslation(rawText);
     }
 
     private static void TryExtractChunk(string data, StringBuilder sb, Action<string>? onDelta)
@@ -321,8 +378,10 @@ internal sealed class ZhipuEngine : OpenAiCompatEngine
             (cfg.Get("translate.zhipu_model", "glm-4-flash") ?? "glm-4-flash").Trim(),
             TranslationEngines.KeyFrom(cfg, "translate.zhipu_api_key", "zhipu_api_key")),
         (text, src, tgt) => TranslationEngines.InstructionContent(text, src, tgt),
-        systemPrompt: "你是专业的翻译引擎。把用户给出的内容翻译成指定的目标语言，只输出译文本身："
-                      + "不要解释、不要加引号、不要标注语言，保留原文的换行与语气。",
+        systemPrompt: "你是字幕翻译引擎，只做一件事：把用户给出的文本翻译成指定目标语言，直接输出译文。"
+                      + "严禁输出任何解释、词义说明、注释、例句、词性、读音、罗马音、原文对照或「翻译：」之类的标签。"
+                      + "不要加引号，不要输出括号补充说明，不要换行分段。"
+                      + "如果内容无法翻译，只输出空字符串。保留原文的换行与语气。",
         temperature: 0.3)
     { }
 }
@@ -404,6 +463,7 @@ internal sealed class GoogleEngine : ITranslationEngine
         }
         var result = sb.ToString().Trim();
         if (result.Length == 0) throw new InvalidOperationException("Google 返回空译文");
+        result = TranslationEngines.SanitizeTranslation(result);
         onDelta?.Invoke(result);
         return result;
     }
@@ -448,6 +508,7 @@ internal sealed class BingEngine : ITranslationEngine
         }
         if (string.IsNullOrWhiteSpace(result)) throw new InvalidOperationException("Bing 返回空译文");
 
+        result = TranslationEngines.SanitizeTranslation(result);
         onDelta?.Invoke(result);
         return result;
     }

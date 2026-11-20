@@ -222,7 +222,7 @@ public partial class SettingsPage : UserControl
         AddCard(liveSec, CardChoice("识别模型（Whisper）", "live.asr.model",
             new[] { "auto", "tiny", "base", "small", "turbo", "anime" },
             new[] { "自动", "tiny 75MB", "base 142MB", "small 466MB",
-                    "turbo 547MB（多语·需GPU）", "anime 1.4GB（仅日语·需GPU）" },
+                    "turbo 547MB（多语·需GPU）", "anime 1.4GB（仅日语·暂不推荐）" },
             cfg.Get("live.asr.model", "auto")));
 
         AddCard(liveSec, CardChoice("GPU 加速（Whisper）", "live.asr.gpu",

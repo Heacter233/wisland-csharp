@@ -32,6 +32,8 @@ public class LiveService : ILiveService, IDisposable
     private AudioCapture? _capture;
     private AudioEnhancer? _enhancer;
     private readonly object _enhancerLock = new();
+    private string _asrSignature = "";
+    private string _enhancerSignature = "";
     private AsrService? _asr;
     private CancellationTokenSource? _cts;
     private Task? _vadLoop;
@@ -159,16 +161,34 @@ public class LiveService : ILiveService, IDisposable
                 }
             }
 
-            _asr = new AsrService(cfg, store);
-            if (!_asr.Load(chosen))
+            // 跨启停复用已加载模型：反复新建/销毁 WhisperFactory 会反复创建 Vulkan 设备，
+            // AMD 驱动长时间运行后容易报错/卡死。配置没变就直接复用。
+            var asrSig = string.Join("|",
+                AsrService.ResolveEngine(cfg, store),
+                chosen,
+                (Cfg("live.asr.gpu", "auto") ?? "auto").Trim().ToLowerInvariant(),
+                Cfg("live.asr.threads", 0),
+                Cfg("live.asr.language", "auto"),
+                cfg.Get("live.asr.anime_strip_s", true));
+
+            if (_asr == null || _asrSignature != asrSig)
             {
-                var msg = "语音模型加载失败（可在翻译页 →「模型」检查或重新下载）";
-                Error?.Invoke(this, msg);
-                Status?.Invoke(this, msg);
-                lock (_runningLock) _running = false;
-                RunningChanged?.Invoke(this, false);
-                await SafeStopAsync();
-                return;
+                try { _asr?.Dispose(); } catch { }
+                _asr = null;
+                var asr = new AsrService(cfg, store);
+                if (!asr.Load(chosen))
+                {
+                    try { asr.Dispose(); } catch { }
+                    var msg = "语音模型加载失败（可在翻译页 →「模型」检查或重新下载）";
+                    Error?.Invoke(this, msg);
+                    Status?.Invoke(this, msg);
+                    lock (_runningLock) _running = false;
+                    RunningChanged?.Invoke(this, false);
+                    await SafeStopAsync();
+                    return;
+                }
+                _asr = asr;
+                _asrSignature = asrSig;
             }
 
             // 2) 人声处理（原始音频 → 增强 → VAD → ASR）
@@ -196,19 +216,42 @@ public class LiveService : ILiveService, IDisposable
                     }
                 }
 
-                if (enhanceMode != AudioEnhancer.ModeOff)
+                var enhThreads = Cfg("live.enhance.threads", 2);
+                var enhVoice = Cfg("live.enhance.voice_sample", "");
+                var enhNorm = Cfg("live.enhance.normalize", true);
+                var enhSig = $"{enhanceMode}|{enhThreads}|{enhVoice}|{enhNorm}";
+
+                if (_enhancer == null || _enhancerSignature != enhSig)
                 {
-                    _enhancer = new AudioEnhancer();
-                    var okEnh = _enhancer.Load(
-                        enhanceMode, modelsDir,
-                        Cfg("live.enhance.threads", 2),
-                        Cfg("live.enhance.voice_sample", ""),
-                        Cfg("live.enhance.normalize", true));
-                    if (!okEnh)
+                    lock (_enhancerLock)
                     {
-                        Status?.Invoke(this, $"人声处理加载失败（{_enhancer.Error}），已回退为「不处理」");
+                        try { _enhancer?.Dispose(); } catch { }
                         _enhancer = null;
                     }
+
+                    if (enhanceMode != AudioEnhancer.ModeOff)
+                    {
+                        var enh = new AudioEnhancer();
+                        var okEnh = enh.Load(enhanceMode, modelsDir, enhThreads, enhVoice, enhNorm);
+                        if (!okEnh)
+                        {
+                            Status?.Invoke(this, $"人声处理加载失败（{enh.Error}），已回退为「不处理」");
+                        }
+                        else
+                        {
+                            lock (_enhancerLock) _enhancer = enh;
+                            _enhancerSignature = enhSig;
+                        }
+                    }
+                    else
+                    {
+                        _enhancerSignature = enhSig;
+                    }
+                }
+                else
+                {
+                    // 复用：清掉上一轮的内部缓冲/增益状态
+                    _enhancer?.Reset();
                 }
             }
 
@@ -288,35 +331,9 @@ public class LiveService : ILiveService, IDisposable
         _cts?.Dispose();
         _cts = null;
 
-        // 增强器：与音频回调互斥，避免音频线程还在 Process 时释放原生模型
-        lock (_enhancerLock)
-        {
-            try { _enhancer?.Dispose(); } catch { }
-            _enhancer = null;
-        }
-
-        // ASR：拿住识别闸门 = 保证没有进行中的转写；拿不到就跳过释放（宁可泄漏一次也别崩）
-        if (_asr != null)
-        {
-            var gotGate = await _asrGate.WaitAsync(TimeSpan.FromSeconds(8));
-            try
-            {
-                if (gotGate)
-                {
-                    try { _asr.Dispose(); } catch { }
-                    _asr = null;
-                }
-                else
-                {
-                    Debug.WriteLine("[LiveService] 警告：识别仍在进行，跳过释放（等待 GC 回收）");
-                    _asr = null;
-                }
-            }
-            finally
-            {
-                if (gotGate) _asrGate.Release();
-            }
-        }
+        // 注意：这里刻意【不销毁】已加载的 ASR / 增强器。
+        // 原因：Whisper 的 Vulkan 后端在长时间运行后反复销毁/重建设备，AMD 驱动容易报错导致卡死；
+        // 保留模型后下次「开始聆听」直接复用（秒开），只在退出程序或配置变化时才释放。
 
         RunningChanged?.Invoke(this, false);
     }
@@ -585,6 +602,14 @@ public class LiveService : ILiveService, IDisposable
         {
             try { StopAsync(wait: true).Wait(3000); } catch { }
         }
+
+        lock (_enhancerLock)
+        {
+            try { _enhancer?.Dispose(); } catch { }
+            _enhancer = null;
+        }
+        try { _asr?.Dispose(); } catch { }
+        _asr = null;
 
         try { _asrGate.Dispose(); } catch { }
     }
