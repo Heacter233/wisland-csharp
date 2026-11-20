@@ -8,7 +8,7 @@
 </p>
 
 > **当前版本 v0.2.1**（[Releases](https://github.com/Heacter233/wisland-csharp/releases/tag/v0.2.1) 安装包）。
-> 作者 **Heacter**；程序属性中的公司/作者信息见 exe 属性页。
+> 作者 **Heacter**；
 >
 > 本版重点：**实时字幕**（纯 C# 离线识别 + 人声处理 + 多引擎翻译）、**翻译多引擎与自动回退**、
 > **Vulkan GPU 加速**、**语音模型按需下载与管理**，以及长时间运行的稳定性修复。完整说明见[当前版本](#当前版本v021)。
@@ -19,13 +19,13 @@
 
 | 包 | 大小 | 运行库 | 附带插件 |
 | --- | --- | --- | --- |
-| `wisland-csharp-0.2.1-slim-x64.zip` | ~34.7 MB | 需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0) | 普通版：股票、Clash 控制 |
+| `wisland-csharp-0.2.1-slim-x64.zip` | ~34.7 MB | 需要 [.NET 8 桌面运行库](https://dotnet.microsoft.com/download/dotnet/8.0) | 普通版：股票、Clash 控制 |
 | `wisland-csharp-0.2.1-portable-x64.zip` | ~97.3 MB | **自带 .NET 8 运行库，解压即用** | 普通版：股票、Clash 控制 |
-| `wisland-csharp-0.2.1-ff14-slim-x64.zip` | ~34.9 MB | 需要 .NET 8 桌面运行时 | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
+| `wisland-csharp-0.2.1-ff14-slim-x64.zip` | ~34.9 MB | 需要 .NET 8 桌面运行库 | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
 | `wisland-csharp-0.2.1-ff14-portable-x64.zip` | ~97.5 MB | **自带 .NET 8 运行库，解压即用** | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
 
-> 包体比 v0.2.0 大（slim 约 7.8 MB → 34.7 MB），因为内置了 Whisper 的 **Vulkan GPU 运行时**（约 55 MB）
-> 与 sherpa-onnx 的 ONNX 运行时；没有可用 GPU 时会自动回退 CPU，不影响功能。
+> 包体比 v0.2.0 大（slim 约 7.8 MB → 34.7 MB），因为内置了 Whisper 的 **Vulkan GPU 运行库**（约 55 MB）
+> 与 sherpa-onnx 的 ONNX 运行库；没有可用 GPU 时会自动回退 CPU，不影响功能。
 
 双击 `Wisland.exe` 即可。首次运行会在 exe 同目录生成 `config.json` 与 `data\`；
 自带插件在 `plugins\<id>\`，可以在设置页「插件设置」里查看/重载，不需要时直接删掉对应目录。
@@ -93,7 +93,7 @@ WASAPI 回环/麦克风 → 人声处理（DPDFNet2 / GTCRN / VoxLock）→ 电�
 ### 系统要求
 
 - Windows 10 19041+ / Windows 11，x64
-- slim 包需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)；portable 包自带
+- slim 包需要 [.NET 8 桌面运行库](https://dotnet.microsoft.com/download/dotnet/8.0)；portable 包自带
 - 实时字幕：GPU 可选（Vulkan/CUDA 不可用时自动 CPU）；模型占用约 0.2~2 GB 磁盘（按下载的模型）
 - 首次运行会下载 WebView 无关的字体（使用系统字体）；会联网获取天气/歌词/翻译
 
@@ -130,7 +130,7 @@ WASAPI 回环/麦克风 → 人声处理（DPDFNet2 / GTCRN / VoxLock）→ 电�
 | [`samples/clash-plugin`](samples/clash-plugin) | 本机服务控制：代理模式切换、策略组节点切换，**HTTP 与命名管道双通道**（自动回退） |
 | [`samples/ff14-recruit-plugin`](samples/ff14-recruit-plugin) | FF14 招募监控：关键词轮换搜索、快照差分去重、屏蔽名单/屏蔽词/休息时段、卡片列表、自定义搜索页 |
 | [`samples/ff14-price-plugin`](samples/ff14-price-plugin) | FF14 物品价格：离线物品词典（17k 条）、Universalis 市场查询、汇总/明细双表、筛选与常用词 |
-| [`samples/ff14-treasure-plugin`](samples/ff14-treasure-plugin) | FF14 挖宝悬浮窗：连 ACT 挖宝会计 WebSocket、自绘宝箱成功/失败图案、出货合并通知 |
+| [`samples/ff14-treasure-plugin`](samples/ff14-treasure-plugin) | FF14 挖宝悬浮窗：连 [ACT 挖宝会计](https://github.com/Heacter233/FF14TreasureHunterACT) WebSocket、自绘宝箱成功/失败图案、出货合并通知 |
 | [`samples/mock`](samples/mock) | 没有 Clash 时用来验证插件：HTTP mock 与命名管道 mock |
 
 ## 关于本项目
@@ -464,7 +464,7 @@ dotnet build -c Debug
 发布（与 Releases 一致）：
 
 ```bash
-# 1) 轻量版（需装 .NET 8 桌面运行时）
+# 1) 轻量版（需装 .NET 8 桌面运行库）
 dotnet publish WislandCSharp\Wisland.csproj -c Release -r win-x64 --self-contained false ^
   -p:DebugType=None -p:DebugSymbols=false -o publish\slim
 
