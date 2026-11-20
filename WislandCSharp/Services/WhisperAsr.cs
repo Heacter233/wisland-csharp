@@ -1,11 +1,16 @@
 using System;
 using System.IO;
+using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 using Whisper.net;
 
 namespace Wisland.Services;
+
+/// <summary>下载进度（字节数来自实际写入量，便于 UI 显示"已缓存可续传"）。</summary>
+public readonly record struct DownloadProgress(double Ratio, long Bytes, long Total, string Text);
 
 /// <summary>
 /// 离线 ASR（Whisper.net / whisper.cpp），负责两件事：
@@ -40,7 +45,9 @@ public sealed class WhisperAsr : IDisposable
 
     private static HttpClient CreateHttp()
     {
-        var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        // 超时不用 HttpClient.Timeout（它覆盖整个响应体读取，大模型下必然被砍断），
+        // 改由下载循环里的"停滞看门狗"控制：连续 StallMs 没收到数据才算超时。
+        var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         try
         {
             http.DefaultRequestHeaders.UserAgent.ParseAdd(
@@ -67,14 +74,30 @@ public sealed class WhisperAsr : IDisposable
 
     public bool Exists(string model) => File.Exists(PathOf(model)) && new FileInfo(PathOf(model)).Length > 10 * 1024 * 1024;
 
-    /// <summary>下载模型（进度 0~1 回调）。已存在则直接返回。</summary>
-    public async Task DownloadAsync(string model, Action<double, string>? progress, CancellationToken ct = default)
+    /// <summary>连续多久收不到数据视为断线（毫秒）。有数据就重置。</summary>
+    private const int StallMs = 45_000;
+
+    /// <summary>
+    /// 下载模型。支持：
+    ///   - 断点续传：已存在的 <c>ggml-x.bin.part</c> 用 HTTP Range 从断点继续；
+    ///   - 取消：ct 触发后保留 .part，下次接着下；
+    ///   - 断线保护：连续 45s 无数据判为超时（保留 .part 供续传）；
+    ///   - 校验：文件大小 + GGML 魔数，脏文件自动丢弃重下一次。
+    /// </summary>
+    public async Task DownloadAsync(string model, Action<DownloadProgress>? progress, CancellationToken ct = default)
     {
         var target = PathOf(model);
-        if (Exists(model)) { progress?.Invoke(1, "模型已存在"); return; }
+        if (Exists(model))
+        {
+            var len = new FileInfo(target).Length;
+            progress?.Invoke(new DownloadProgress(1, len, len, "模型已存在"));
+            return;
+        }
 
         Directory.CreateDirectory(_modelsDir);
         var tmp = target + ".part";
+        var totalHint = ReadTotalHint(tmp);
+
         var urls = new[]
         {
             $"https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/{FileName(model)}",
@@ -82,57 +105,199 @@ public sealed class WhisperAsr : IDisposable
         };
 
         Exception? last = null;
-        foreach (var url in urls)
+        var cleaned = false;
+
+        while (true)
         {
-            try
+            var needClean = false;
+            foreach (var url in urls)
             {
-                using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-                resp.EnsureSuccessStatusCode();
-                var total = resp.Content.Headers.ContentLength ?? 0;
-
-                await using (var input = await resp.Content.ReadAsStreamAsync(ct))
-                await using (var output = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
+                ct.ThrowIfCancellationRequested();
+                try
                 {
-                    var buffer = new byte[81920];
-                    long done = 0;
-                    var lastReport = DateTime.MinValue;
-                    while (true)
-                    {
-                        var read = await input.ReadAsync(buffer, 0, buffer.Length, ct);
-                        if (read <= 0) break;
-                        await output.WriteAsync(buffer, 0, read, ct);
-                        done += read;
+                    await DownloadFromAsync(url, tmp, progress, totalHint, ct);
 
-                        if ((DateTime.UtcNow - lastReport).TotalMilliseconds > 200)
-                        {
-                            lastReport = DateTime.UtcNow;
-                            var ratio = total > 0 ? (double)done / total : 0;
-                            progress?.Invoke(ratio, $"{done / 1048576.0:0.0} / {(total > 0 ? (total / 1048576.0).ToString("0.0") : "?")} MB");
-                        }
-                    }
+                    var size = new FileInfo(tmp).Length;
+                    Validate(tmp);
+
+                    if (File.Exists(target)) File.Delete(target);
+                    File.Move(tmp, target, overwrite: true);
+                    TryDelete(TotalHintPath(tmp));
+                    progress?.Invoke(new DownloadProgress(1, size, size, "模型下载完成"));
+                    return;
                 }
-
-                // 校验：GGML 魔数 "ggml"（小端）
-                var magic = new byte[4];
-                using (var fs = File.OpenRead(tmp)) fs.Read(magic, 0, 4);
-                if (magic[0] != 0x6C || magic[1] != 0x6D || magic[2] != 0x67 || magic[3] != 0x67)
-                    throw new InvalidDataException("下载内容不是 GGML 模型（魔数不匹配）");
-
-                if (File.Exists(target)) File.Delete(target);
-                File.Move(tmp, target);
-                progress?.Invoke(1, "模型下载完成");
-                return;
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;                       // 用户取消：保留 .part
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (ex is InvalidDataException) needClean = true;   // 内容脏：只能重下
+                    // 其他错误（网络/超时）保留 .part，下次续传
+                }
             }
-            catch (Exception ex)
+
+            if (needClean && !cleaned)
             {
-                last = ex;
-                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                // 只清一次：清完再完整试一轮，避免死循环
+                cleaned = true;
+                TryDelete(tmp);
+                TryDelete(TotalHintPath(tmp));
+                totalHint = 0;
+                continue;
             }
+            break;
         }
 
         throw new InvalidOperationException(
             "模型下载失败（镜像与官方源都不可用）：" + (last?.Message ?? "未知错误") +
             "\n可手动下载 " + FileName(model) + " 放到 " + _modelsDir, last);
+    }
+
+    /// <summary>从单个源下载（若 .part 存在则续传）。</summary>
+    private async Task DownloadFromAsync(string url, string tmp, Action<DownloadProgress>? progress,
+        long totalHint, CancellationToken ct)
+    {
+        long offset = 0;
+        if (File.Exists(tmp))
+        {
+            try { offset = new FileInfo(tmp).Length; } catch { offset = 0; }
+        }
+        // .part 比已知总大小还大：内容已错乱，丢弃重下
+        if (totalHint > 0 && offset >= totalHint) { TryDelete(tmp); offset = 0; }
+        if (offset > 1024L * 1024 * 1024) { TryDelete(tmp); offset = 0; }
+
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        if (offset > 0) req.Headers.Range = new RangeHeaderValue(offset, null);
+
+        using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+
+        if (resp.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+            throw new InvalidDataException("续传位置无效（服务器返回 416），需要重新下载");
+
+        resp.EnsureSuccessStatusCode();
+
+        // 206 = 服务器接受了 Range（真续传）；200 = 不支持 Range，只能从头写
+        var partial = resp.StatusCode == HttpStatusCode.PartialContent;
+        if (!partial) offset = 0;
+
+        var restLen = resp.Content.Headers.ContentLength ?? 0;
+        var total = restLen > 0 ? offset + restLen : totalHint;
+        if (total > 0) WriteTotalHint(tmp, total);
+
+        progress?.Invoke(new DownloadProgress(
+            total > 0 ? Math.Min(1.0, (double)offset / total) : 0,
+            offset, total,
+            offset > 0 ? $"从 {Mb(offset)} 处续传" : "开始下载"));
+
+        // 停滞看门狗：ReadAsync 用它的 token，收到数据就往后推
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        stall.CancelAfter(StallMs);
+
+        await using var input = await resp.Content.ReadAsStreamAsync(stall.Token);
+        await using var output = new FileStream(tmp,
+            offset > 0 ? FileMode.Append : FileMode.Create,
+            FileAccess.Write, FileShare.None, 81920, useAsync: true);
+
+        var buffer = new byte[81920];
+        long done = offset;
+        var lastReport = DateTime.MinValue;
+
+        while (true)
+        {
+            int read;
+            try
+            {
+                read = await input.ReadAsync(buffer, 0, buffer.Length, stall.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new IOException($"网络停滞超过 {StallMs / 1000} 秒（已保存 {Mb(done)}，可继续下载）");
+            }
+            if (read <= 0) break;
+
+            // 落盘不接 ct：保证每个 80KB 块完整写入，否则续传点会落在半个块上
+            await output.WriteAsync(buffer, 0, read, CancellationToken.None);
+            done += read;
+            stall.CancelAfter(StallMs);
+
+            if ((DateTime.UtcNow - lastReport).TotalMilliseconds > 200)
+            {
+                lastReport = DateTime.UtcNow;
+                progress?.Invoke(new DownloadProgress(
+                    total > 0 ? Math.Min(1.0, (double)done / total) : 0,
+                    done, total,
+                    $"{Mb(done)} / {(total > 0 ? Mb(total) : "?")} MB"));
+            }
+        }
+
+        await output.FlushAsync(CancellationToken.None);
+
+        if (total > 0 && done < total)
+            throw new IOException($"连接提前结束（{Mb(done)} / {Mb(total)} MB），已保存，可继续下载");
+        if (total > 0 && done > total)
+            throw new InvalidDataException("下载字节数超过预期（文件可能损坏），需要重新下载");
+    }
+
+    private static string Mb(long bytes) => (bytes / 1048576.0).ToString("0.0");
+
+    private static string TotalHintPath(string tmp) => tmp + ".total";
+
+    private static long ReadTotalHint(string tmp)
+    {
+        try
+        {
+            var p = TotalHintPath(tmp);
+            if (!File.Exists(p)) return 0;
+            return long.TryParse(File.ReadAllText(p).Trim(), out var v) ? v : 0;
+        }
+        catch { return 0; }
+    }
+
+    private static void WriteTotalHint(string tmp, long total)
+    {
+        try
+        {
+            var p = TotalHintPath(tmp);
+            var s = total.ToString();
+            if (!File.Exists(p) || File.ReadAllText(p) != s) File.WriteAllText(p, s);
+        }
+        catch { }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+
+    /// <summary>完整性校验：体积下限 + GGML 魔数 "ggml"（0x6C 0x6D 0x67 0x67）。</summary>
+    private static void Validate(string file)
+    {
+        var len = new FileInfo(file).Length;
+        if (len < 10 * 1024 * 1024)
+            throw new InvalidDataException($"文件过小（{Mb(len)} MB），不是有效的 GGML 模型");
+
+        var magic = new byte[4];
+        using (var fs = File.OpenRead(file)) fs.ReadExactly(magic, 0, 4);
+        if (magic[0] != 0x6C || magic[1] != 0x6D || magic[2] != 0x67 || magic[3] != 0x67)
+            throw new InvalidDataException("下载内容不是 GGML 模型（魔数不匹配）");
+    }
+
+    /// <summary>未完成的临时文件大小（0 表示没有缓存）。</summary>
+    public long PartialBytes(string model)
+    {
+        var tmp = PathOf(model) + ".part";
+        try { return File.Exists(tmp) ? new FileInfo(tmp).Length : 0; }
+        catch { return 0; }
+    }
+
+    /// <summary>丢弃未完成的下载缓存。</summary>
+    public void ClearPartial(string model)
+    {
+        var tmp = PathOf(model) + ".part";
+        TryDelete(tmp);
+        TryDelete(TotalHintPath(tmp));
     }
 
     /// <summary>识别一段 16k 单声道采样，language 为 whisper 语言码（auto/ja/en/zh）。</summary>

@@ -783,17 +783,31 @@ public partial class SettingsPage : UserControl
             bar.Visibility = Visibility.Visible;
             try
             {
-                var target = Services.WhisperAsr.ResolveModel(ServiceHub.Config.Get("live.asr.model", "auto"));
-                var dl = new Services.WhisperAsr(LiveModelsDir());
-                await dl.DownloadAsync(target, (p, msg) =>
+                // 统一走 ModelManager：与「翻译 → 模型」子页共享状态，支持取消/续传
+                var mgr = ServiceHub.Models;
+                if (mgr == null) { status.Text = "模型服务未就绪"; return; }
+
+                if (mgr.AnyDownloading) { mgr.CancelAll(); status.Text = "已取消下载"; return; }
+
+                if (mgr.Exists(resolved))
+                {
+                    status.Text = $"已下载：{resolved}（{mgr.SizeBytes(resolved) / 1048576.0:0.0} MB）";
+                    bar.Value = 1;
+                    return;
+                }
+
+                var ok = await mgr.EnsureAsync(resolved, p =>
                 {
                     Dispatcher.BeginInvoke(new Action(() =>
                     {
-                        bar.Value = p;
-                        status.Text = $"下载中 {p:P0}  {msg}";
+                        bar.Value = p.Ratio;
+                        status.Text = $"下载中 {p.Ratio:P0}  {p.Text}";
                     }), System.Windows.Threading.DispatcherPriority.Background);
                 });
-                status.Text = $"已下载：{target}";
+                var st = mgr.StateOf(resolved);
+                status.Text = ok && mgr.Exists(resolved)
+                    ? $"已下载：{resolved}"
+                    : st.Message.Length > 0 ? st.Message : "下载失败";
             }
             catch (Exception ex)
             {

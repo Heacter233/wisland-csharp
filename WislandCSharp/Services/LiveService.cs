@@ -89,6 +89,20 @@ public class LiveService : ILiveService, IDisposable
         catch { return fallback; }
     }
 
+    /// <summary>ModelManager 不可用时的兜底：live.models_dir（相对路径 → data/）。</summary>
+    private string FallbackModelsDir()
+    {
+        var dir = Cfg("live.models_dir", _modelsDir);
+        if (string.IsNullOrWhiteSpace(dir)) dir = "models";
+        if (Path.IsPathRooted(dir)) return dir;
+
+        var dataDir = Cfg("app.data_dir", "");
+        var baseDir = string.IsNullOrWhiteSpace(dataDir)
+            ? Path.Combine(AppContext.BaseDirectory, "data")
+            : dataDir;
+        return Path.Combine(baseDir, dir);
+    }
+
     /// <summary>
     ///     // ---------------- 生命周期 ----------------
 
@@ -104,36 +118,37 @@ public class LiveService : ILiveService, IDisposable
         {
             RunningChanged?.Invoke(this, true);
 
-            // 1) 模型目录：优先配置 live.models_dir，相对路径放 data/ 下
-            var modelsDir = _modelsDir;
-            if (string.IsNullOrWhiteSpace(modelsDir)) modelsDir = "models";
-            if (!Path.IsPathRooted(modelsDir))
-            {
-                var dataDir = Cfg("app.data_dir", "");
-                var baseDir = string.IsNullOrWhiteSpace(dataDir)
-                    ? Path.Combine(AppContext.BaseDirectory, "data")
-                    : dataDir;
-                modelsDir = Path.Combine(baseDir, modelsDir);
-            }
+            // 1) 模型目录：统一由 ModelManager 解析（live.models_dir，相对路径放 data/ 下），
+            //    保证"这里判断存在与否"和"模型页下载到哪"永远是同一个目录。
+            var modelsDir = ServiceHub.Models?.Dir ?? FallbackModelsDir();
             Directory.CreateDirectory(modelsDir);
 
             _asr = new WhisperAsr(modelsDir);
             var model = WhisperAsr.ResolveModel(Cfg("live.asr.model", "auto"));
             if (!_asr.Exists(model))
             {
-                // 首次使用：应用内引导下载（带进度）
+                // 首次使用：应用内引导下载（带进度，可取消；.part 保留可续传）
                 Status?.Invoke(this, $"首次使用：正在下载语音模型 {model}（{WhisperAsr.FileName(model)}）…");
                 DownloadingChanged?.Invoke(this, true);
+                bool ok;
                 try
                 {
-                    await _asr.DownloadAsync(model, (p, msg) =>
-                    {
-                        Status?.Invoke(this, $"下载模型 {p:P0}  {msg}");
-                    });
+                    ok = await ServiceHub.Models.EnsureAsync(model, p =>
+                        Status?.Invoke(this, $"下载模型 {p.Ratio:P0}  {p.Text}"));
                 }
                 finally
                 {
                     DownloadingChanged?.Invoke(this, false);
+                }
+
+                if (!ok || !_asr.Exists(model))
+                {
+                    // 用户取消或下载失败：干净地停在这里，不启动音频捕获
+                    Status?.Invoke(this, "已取消模型下载");
+                    lock (_runningLock) _running = false;
+                    RunningChanged?.Invoke(this, false);
+                    await SafeStopAsync();
+                    return;
                 }
             }
             _asr.UseModel(model);

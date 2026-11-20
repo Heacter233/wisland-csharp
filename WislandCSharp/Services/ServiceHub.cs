@@ -50,6 +50,9 @@ public static class ServiceHub
     public static RadioService Radio { get; set; } = null!;
     public static WordbookService Wordbook { get; set; } = null!;
 
+    /// <summary>语音模型下载管理器（下载状态与生命周期独立于页面）。</summary>
+    public static ModelManager Models { get; set; } = null!;
+
     /// <summary>请求展开到指定页（"" 表示保持当前页）。由 MainWindow 实现。</summary>
     public static Action<string>? RequestExpand { get; set; }
 

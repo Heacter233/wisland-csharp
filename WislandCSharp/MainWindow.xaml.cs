@@ -98,7 +98,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, double> _pageHeights = new()
     {
         ["home"] = 240, ["msg"] = 270, ["weather"] = 318,
-        ["ctl"] = 180, ["clip"] = 400, ["trans"] = 330, ["model"] = 330,
+        ["ctl"] = 180, ["clip"] = 400, ["trans"] = 330,
     };
     private string _currentPage = "home";
 
@@ -184,7 +184,6 @@ public partial class MainWindow : Window
             ("ctl", Glyph.Sliders, "控制"),
             ("clip", Glyph.Clip, "剪贴板"),
             ("trans", Glyph.Translate, "翻译"),
-            ("model", Glyph.Model, "模型"),
             ("set", Glyph.Gear, "设置"),
         });
         _nav.SelectionChanged += (_, key) => ShowPage(key);
@@ -284,7 +283,6 @@ public partial class MainWindow : Window
         _pages["ctl"] = new ControlsPage();
         _pages["clip"] = new ClipboardPage();
         _pages["trans"] = new TranslatePage();
-        _pages["model"] = new ModelsPage();
         _pages["set"] = new SettingsPage();
         ShowPage("home", force: true);
         _chrome.SnapSize();
@@ -989,6 +987,16 @@ public partial class MainWindow : Window
             if (arg != null)
             {
                 var key = arg["--page:".Length..];
+
+                // 模型管理现在是翻译页的子页：--page:model 仍然可用，映射到「翻译 → 模型」
+                if (key.Equals("model", StringComparison.OrdinalIgnoreCase))
+                {
+                    ShowPage("trans");
+                    ((TranslatePage)_pages["trans"]).ShowModels();
+                    Expand();
+                    return;
+                }
+
                 if (_pages.ContainsKey(key) || IsPluginPage(key))
                 {
                     ShowPage(key);

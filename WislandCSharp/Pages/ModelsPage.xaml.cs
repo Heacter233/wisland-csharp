@@ -1,10 +1,10 @@
 using System;
-using System.IO;
-using System.Threading.Tasks;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Wisland.Controls;
 using Wisland.Services;
 using Wisland.Theme;
@@ -12,38 +12,81 @@ using Wisland.Theme;
 namespace Wisland.Pages;
 
 /// <summary>
-/// 模型管理页：实时字幕的离线语音模型（Whisper GGML）。
+/// 语音模型子页（挂在翻译页「模型」分段下）：离线 ASR 用的 Whisper GGML 模型。
 ///
-/// 每张卡片显示：模型名 / 体积 / 状态（已下载或未下载）/ 进度 / 操作按钮
-///   - 下载 / 校验：从镜像下载（带进度与魔数校验）
-///   - 删除：两步确认，避免误点
+/// 每张卡片显示：模型名 / 体积 / 徽标（使用中·已下载·未下载·下载中）/ 状态 / 进度 / 操作
+///   - 下载 / 继续 / 重试：断点续传（.part 保留，应用重启也能接上）
+///   - 取消：立即中断，已下部分保留
 ///   - 设为默认：写入 live.asr.model（"自动"按 CPU 核心数选择）
-/// 如果字幕正在运行，删除当前使用的模型会被拒绝并提示先停止聆听。
+///   - 删除 / 清除缓存：两步确认，避免误点
+///
+/// 下载状态全部来自 <see cref="ModelManager"/>，本页只负责渲染与转发操作：
+/// 因此切到别的分段/页面再回来，进度条会按服务状态重建，而不是"消失"。
 /// </summary>
 public partial class ModelsPage : UserControl
 {
-    /// <summary>删除按钮的两步确认状态（模型名 → 是否已进入"确认删除"）。</summary>
-    private readonly System.Collections.Generic.HashSet<string> _confirmDelete = new();
-    private bool _busy;
+    /// <summary>单张卡片的可变更控件引用（避免每次进度刷新都重建视觉树）。</summary>
+    private sealed class CardUi
+    {
+        public string Name = "";
+        public Border Root = null!;
+        public Border BadgeHost = null!;
+        public TextBlock Status = null!;
+        public ProgressBar Bar = null!;
+        public Button Primary = null!;
+        public Button SetDefault = null!;
+        public Button Delete = null!;
+        public string BadgeKey = "";
+        public string PrimaryKey = "";
+        public string DeleteKey = "";
+    }
 
-    /// <summary>最近一次操作结果的提示（Refresh 重建卡片后会丢失，所以单独记住）。</summary>
-    private string _lastMessageModel = "";
-    private string _lastMessage = "";
+    private readonly Dictionary<string, CardUi> _cards = new();
+    private readonly HashSet<string> _confirmDelete = new();
+    private bool _hooked;
+    private string _model = "auto";
 
     public ModelsPage()
     {
         InitializeComponent();
-        Loaded += (_, _) => Refresh();
+        Loaded += (_, _) => Hook(true);
+        Unloaded += (_, _) => Hook(false);
     }
+
+    // ---------------- 订阅 ----------------
+
+    private void Hook(bool on)
+    {
+        if (on == _hooked) return;
+        _hooked = on;
+        var mgr = ServiceHub.Models;
+        if (mgr == null) return;
+
+        if (on)
+        {
+            mgr.Changed += OnManagerChanged;
+            Refresh();
+        }
+        else
+        {
+            mgr.Changed -= OnManagerChanged;
+        }
+    }
+
+    /// <summary>下载进度来自后台线程：切回 UI 线程只更新对应卡片。</summary>
+    private void OnManagerChanged(string model) => Dispatcher.BeginInvoke(new Action(() =>
+    {
+        if (!IsLoaded) return;
+        if (_cards.TryGetValue(model, out var card)) Apply(card);
+        UpdateHint();
+    }), DispatcherPriority.Background);
 
     // ---------------- 目录 ----------------
 
-    private static string ModelsDir()
+    private string ModelsDir()
     {
-        var dir = ServiceHub.Config.Get("live.models_dir", "models");
-        if (string.IsNullOrWhiteSpace(dir)) dir = "models";
-        if (Path.IsPathRooted(dir)) return dir;
-        return Path.Combine(ServiceHub.Config.DataDir, dir);
+        try { return ServiceHub.Models.Dir; }
+        catch { return System.IO.Path.Combine(ServiceHub.Config.DataDir, "models"); }
     }
 
     private void BtnOpenDir_Click(object sender, RoutedEventArgs e)
@@ -51,7 +94,7 @@ public partial class ModelsPage : UserControl
         try
         {
             var dir = ModelsDir();
-            Directory.CreateDirectory(dir);
+            System.IO.Directory.CreateDirectory(dir);
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
         }
         catch { }
@@ -63,61 +106,77 @@ public partial class ModelsPage : UserControl
     {
         try
         {
-            var parent = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            var grand = Path.GetFileName(Path.GetDirectoryName(
-                path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? "");
+            var trimmed = path.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+            var parent = System.IO.Path.GetFileName(trimmed);
+            var grand = System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(trimmed) ?? "");
             return string.IsNullOrEmpty(grand) ? parent : $"…\\{grand}\\{parent}";
         }
         catch { return path; }
     }
 
-    // ---------------- 构建卡片 ----------------
+    // ---------------- 构建 / 刷新 ----------------
 
-    private void Refresh()
+    /// <summary>重建卡片（目录、默认模型变化时调用；也供父页切分段时调用）。</summary>
+    public void Refresh()
     {
         var dir = ModelsDir();
-        // 标题行空间有限：只显示末两段（…\data\models），完整路径放 ToolTip
         DirText.Text = ShortPath(dir);
         DirText.ToolTip = dir;
 
-        var current = ServiceHub.Config.Get("live.asr.model", "auto");
-        var resolved = WhisperAsr.ResolveModel(current);
+        _model = ServiceHub.Config.Get("live.asr.model", "auto");
 
         CardStack.Children.Clear();
+        _cards.Clear();
         foreach (var (name, sizeMb, note) in WhisperAsr.Models)
-            CardStack.Children.Add(BuildCard(name, sizeMb, note, current, resolved));
+        {
+            var card = BuildCard(name, sizeMb, note);
+            _cards[name] = card;
+            CardStack.Children.Add(card.Root);
+        }
+        foreach (var card in _cards.Values) Apply(card);
 
-        HintText.Text = $"当前使用：{resolved}" +
-            (string.Equals(current, "auto", StringComparison.OrdinalIgnoreCase)
-                ? $"（由「自动」按 {Environment.ProcessorCount} 核选择）"
-                : "（手动指定）") +
-            " · 删除模型前请先停止聆听；首次开始聆听也会自动下载。";
-
+        UpdateHint();
         Host.Refresh();
     }
 
-    private Border BuildCard(string name, int sizeMb, string note, string current, string resolved)
+    private void UpdateHint()
     {
-        var asr = new WhisperAsr(ModelsDir());
-        var exists = asr.Exists(name);
-        var isCurrent = string.Equals(name, resolved, StringComparison.OrdinalIgnoreCase);
-        var running = ServiceHub.Live?.Running == true;
+        var resolved = WhisperAsr.ResolveModel(_model);
+        var parts = new List<string>
+        {
+            $"当前使用：{resolved}" +
+            (string.Equals(_model, "auto", StringComparison.OrdinalIgnoreCase)
+                ? $"（自动 · {Environment.ProcessorCount} 核）"
+                : "（手动指定）"),
+        };
 
-        var card = new Border
+        if (ServiceHub.Models?.AnyDownloading == true) parts.Add("下载中可从卡片取消，已下部分保留");
+        else parts.Add("支持断点续传 · 首次开始聆听也会自动下载");
+
+        HintText.Text = string.Join(" · ", parts);
+    }
+
+    private CardUi BuildCard(string name, int sizeMb, string note)
+    {
+        var card = new CardUi { Name = name };
+
+        var root = new Border
         {
             Width = 592,
-            Padding = new Thickness(12, 10, 12, 10),
-            Margin = new Thickness(0, 0, 0, 8),
+            Padding = new Thickness(12, 8, 10, 8),
+            Margin = new Thickness(0, 0, 0, 6),
             CornerRadius = new CornerRadius(12),
             Background = new SolidColorBrush(Themes.Card()),
+            ToolTip = note,
         };
+        card.Root = root;
 
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // 左侧：名称 + 状态 + 进度
-        var left = new StackPanel { Margin = new Thickness(0, 0, 10, 0) };
+        // 左：标题行（名称 + 体积 + 徽标）、状态、进度
+        var left = new StackPanel { Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
 
         var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
         titleRow.Children.Add(new TextBlock
@@ -131,212 +190,273 @@ public partial class ModelsPage : UserControl
         titleRow.Children.Add(new TextBlock
         {
             Text = $"  {sizeMb} MB",
-            FontSize = 11,
+            FontSize = 10.5,
             Foreground = new SolidColorBrush(Themes.Text3()),
             VerticalAlignment = VerticalAlignment.Center,
         });
 
-        // 状态徽标：已下载 / 未下载 / 正在使用
-        if (exists)
+        card.BadgeHost = new Border
         {
-            titleRow.Children.Add(Badge(isCurrent ? "使用中" : "已下载",
-                isCurrent ? Themes.OnColor() : Themes.Track(),
-                isCurrent ? Themes.OnFg() : Themes.Text()));
-        }
-        else
-        {
-            titleRow.Children.Add(Badge("未下载", Color.FromArgb(40, 255, 255, 255), Themes.Text2()));
-        }
+            Margin = new Thickness(6, 0, 0, 0),
+            Padding = new Thickness(6, 0, 6, 1),
+            CornerRadius = new CornerRadius(7),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock { FontSize = 10 },
+        };
+        titleRow.Children.Add(card.BadgeHost);
         left.Children.Add(titleRow);
 
-        left.Children.Add(new TextBlock
+        card.Status = new TextBlock
         {
-            Text = note,
             Style = (Style)FindResource("T3"),
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 4, 0, 0),
-        });
-
-        var status = new TextBlock
-        {
-            Text = string.Equals(_lastMessageModel, name, StringComparison.OrdinalIgnoreCase) && _lastMessage.Length > 0
-                ? _lastMessage
-                : exists ? FileSizeText(asr.PathOf(name)) : "点右侧「下载」获取（镜像优先，失败回退官方源）",
-            Style = (Style)FindResource("T3"),
-            FontSize = 10.5,
+            FontSize = 10,
             Margin = new Thickness(0, 3, 0, 0),
             TextWrapping = TextWrapping.Wrap,
         };
-        left.Children.Add(status);
+        left.Children.Add(card.Status);
 
-        var bar = new ProgressBar
+        card.Bar = new ProgressBar
         {
             Height = 3,
-            Margin = new Thickness(0, 7, 0, 0),
+            Margin = new Thickness(0, 5, 0, 0),
             Minimum = 0,
             Maximum = 1,
             Visibility = Visibility.Collapsed,
         };
-        left.Children.Add(bar);
+        left.Children.Add(card.Bar);
 
         Grid.SetColumn(left, 0);
         grid.Children.Add(left);
 
-        // 右侧：操作按钮
+        // 右：操作按钮（内容按状态变化，点击时再判断意图）
         var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center,
         };
 
-        var download = SmallButton(exists ? "校验" : "下载");
-        download.Click += async (_, _) => await DownloadAsync(name, exists, status, bar, download);
-        actions.Children.Add(download);
+        card.Primary = SmallButton("下载");
+        card.Primary.Click += (_, _) => OnPrimaryClick(card);
+        actions.Children.Add(card.Primary);
 
-        var setDefault = SmallButton("设为默认");
-        setDefault.IsEnabled = exists && !isCurrent;
-        setDefault.Click += (_, _) =>
+        card.SetDefault = SmallButton("设为默认");
+        card.SetDefault.Click += (_, _) =>
         {
-            ServiceHub.Config.Set("live.asr.model", name);
+            if (!ServiceHub.Models.Exists(card.Name)) return;
+            ServiceHub.Config.Set("live.asr.model", card.Name);
             Refresh();
         };
-        actions.Children.Add(setDefault);
+        actions.Children.Add(card.SetDefault);
 
-        var del = SmallButton("删除", danger: true);
-        del.IsEnabled = exists && !running;
-        del.ToolTip = running ? "字幕正在运行，请先停止聆听" : "删除本地模型文件";
-        var confirming = _confirmDelete.Contains(name);
-        if (confirming)
-        {
-            del.Content = "确认删除";
-            del.SetResourceReference(Control.BackgroundProperty, "AppUp");
-            del.SetResourceReference(Control.ForegroundProperty, "AppOnFg");
-        }
-        del.Click += (_, _) =>
-        {
-            if (!_confirmDelete.Contains(name))
-            {
-                _confirmDelete.Add(name);
-                Refresh();
-                return;
-            }
-            _confirmDelete.Remove(name);
-            string msg;
-            try
-            {
-                File.Delete(asr.PathOf(name));
-                msg = "已删除本地模型文件";
-            }
-            catch (Exception ex)
-            {
-                msg = "删除失败：" + ex.Message;
-            }
-            _lastMessageModel = name; _lastMessage = msg;
-            Refresh();
-        };
-        actions.Children.Add(del);
+        card.Delete = SmallButton("删除");
+        card.Delete.Click += (_, _) => OnDeleteClick(card);
+        actions.Children.Add(card.Delete);
 
         Grid.SetColumn(actions, 1);
         grid.Children.Add(actions);
 
-        card.Child = grid;
+        root.Child = grid;
         return card;
     }
 
-    private async Task DownloadAsync(string name, bool exists, TextBlock status, ProgressBar bar, Button btn)
+    // ---------------- 状态渲染 ----------------
+
+    /// <summary>按服务状态刷新一张卡片（不重建视觉树）。</summary>
+    private void Apply(CardUi card)
     {
-        if (_busy) return;
-        _busy = true;
-        btn.IsEnabled = false;
-        bar.Visibility = Visibility.Visible;
+        var mgr = ServiceHub.Models;
+        if (mgr == null) return;
+
+        var name = card.Name;
+        var st = mgr.StateOf(name);
+        var exists = mgr.Exists(name);
+        var partial = mgr.PartialBytes(name);
+        var resolved = WhisperAsr.ResolveModel(_model);
+        var isCurrent = string.Equals(name, resolved, StringComparison.OrdinalIgnoreCase);
+        var confirming = _confirmDelete.Contains(name);
+
+        // 徽标
+        var (badge, bg, fg) = st.Running
+            ? ("下载中", Themes.OnColor(), Themes.OnFg())
+            : exists && isCurrent ? ("使用中", Themes.OnColor(), Themes.OnFg())
+            : exists ? ("已下载", Themes.Track(), Themes.Text())
+            : partial > 0 ? ("已暂停", Color.FromArgb(40, 255, 255, 255), Themes.Text2())
+            : ("未下载", Color.FromArgb(40, 255, 255, 255), Themes.Text2());
+
+        if (card.BadgeKey != badge)
+        {
+            card.BadgeKey = badge;
+            card.BadgeHost.Background = new SolidColorBrush(bg);
+            ((TextBlock)card.BadgeHost.Child).Text = badge;
+            ((TextBlock)card.BadgeHost.Child).Foreground = new SolidColorBrush(fg);
+        }
+
+        // 状态文字
+        var note = NoteOf(name);
+        card.Status.Text = st.Running
+            ? $"下载中 {st.Progress:P0} · {st.Message}"
+            : exists
+                ? $"已下载 {mgr.SizeBytes(name) / 1048576.0:0.0} MB · " +
+                  (st.Message.StartsWith("校验", StringComparison.Ordinal) ? st.Message : note)
+                : partial > 0
+                    ? (st.Canceled || st.Error.Length > 0
+                        ? st.Message
+                        : $"已缓存 {partial / 1048576.0:0.0} MB · 点「继续」续传")
+                    : st.Error.Length > 0 || st.Canceled
+                        ? st.Message
+                        : $"{note} · 点「下载」获取（镜像优先，失败自动回退官方源）";
+
+        // 进度条（不知道总大小时只更新文字，避免显示一条空槽）
+        var totalBytes = st.Total > 0 ? st.Total : mgr.TotalHintBytes(name);
+        var showBar = (st.Running || (partial > 0 && !exists)) && totalBytes > 0;
+        card.Bar.Visibility = showBar ? Visibility.Visible : Visibility.Collapsed;
+        if (showBar)
+        {
+            var ratio = st.Running
+                ? st.Progress
+                : (double)partial / totalBytes;
+            card.Bar.Value = Math.Clamp(ratio, 0, 1);
+        }
+
+        // 主按钮：取消 / 继续 / 重试 / 下载 / 校验（下载类操作强调色，取消用中性色）
+        var (label, accent) = st.Running
+            ? ("取消", false)
+            : exists ? ("校验", false)
+            : partial > 0 ? ("继续", true)
+            : st.Error.Length > 0 || st.Canceled ? ("重试", true)
+            : ("下载", true);
+        var key = label + "|" + accent;
+        if (card.PrimaryKey != key)
+        {
+            card.PrimaryKey = key;
+            card.Primary.Content = label;
+            StyleButton(card.Primary, accent);
+        }
+        card.Primary.IsEnabled = true;
+        card.Primary.ToolTip = st.Running ? "取消下载（已下部分保留，可续传）" : null;
+
+        // 设为默认
+        card.SetDefault.IsEnabled = exists && !isCurrent && !st.Running;
+        card.SetDefault.Content = isCurrent ? "当前默认" : "设为默认";
+
+        // 删除 / 清除缓存
+        var canClear = exists || partial > 0;
+        var delLabel = confirming
+            ? (exists ? "确认删除" : "确认清除")
+            : exists ? "删除" : partial > 0 ? "清除缓存" : "删除";
+        var delKey = delLabel + "|" + (canClear && !st.Running);
+        if (card.DeleteKey != delKey)
+        {
+            card.DeleteKey = delKey;
+            card.Delete.Content = delLabel;
+            card.Delete.IsEnabled = canClear && !st.Running;
+            StyleButton(card.Delete, confirming);   // 确认态用强调色提醒
+        }
+        card.Delete.ToolTip = !canClear ? "没有可删除的文件"
+            : st.Running ? "下载中，请先取消"
+            : exists ? "删除本地模型文件" : "删除未下完的缓存";
+    }
+
+    private static string NoteOf(string name)
+    {
+        foreach (var (n, _, note) in WhisperAsr.Models)
+            if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return note;
+        return "";
+    }
+
+    // ---------------- 操作 ----------------
+
+    private void OnPrimaryClick(CardUi card)
+    {
+        var mgr = ServiceHub.Models;
+        if (mgr == null) return;
+        var st = mgr.StateOf(card.Name);
+
+        if (st.Running) { mgr.Cancel(card.Name); return; }
+
+        if (mgr.Exists(card.Name))
+        {
+            // 已下载：只做一次本地校验（大小 + 魔数在位）
+            var size = mgr.SizeBytes(card.Name);
+            st.Error = size > 10 * 1024 * 1024 ? "" : "文件过小，可能不完整";
+            st.Canceled = false;
+            st.Message = st.Error.Length > 0 ? "校验失败：" + st.Error : "校验通过（文件完整）";
+            Apply(card);
+            return;
+        }
+
+        _ = DownloadAsync(card);
+    }
+
+    private async System.Threading.Tasks.Task DownloadAsync(CardUi card)
+    {
+        var mgr = ServiceHub.Models;
+        if (mgr == null) return;
+        _confirmDelete.Remove(card.Name);
+        Apply(card);
+        UpdateHint();
 
         try
         {
-            var asr = new WhisperAsr(ModelsDir());
-            string final;
-            if (exists)
-            {
-                // 已下载：只做一次存在性与大小校验
-                final = asr.Exists(name) ? "校验通过：文件完整" : "校验失败：文件缺失或过小，请重新下载";
-                status.Text = final;
-                bar.Value = 1;
-            }
-            else
-            {
-                status.Text = "准备下载…";
-                await asr.DownloadAsync(name, (p, msg) =>
-                {
-                    Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        bar.Value = p;
-                        status.Text = $"下载中 {p:P0}  {msg}";
-                    }), System.Windows.Threading.DispatcherPriority.Background);
-                });
-                final = "下载完成";
-                status.Text = final;
-            }
-            _lastMessageModel = name; _lastMessage = final;
-        }
-        catch (Exception ex)
-        {
-            status.Text = "下载失败：" + ex.Message;
-            _lastMessageModel = name; _lastMessage = status.Text;
+            // 失败/取消的原因已经在状态里（卡片上会显示），这里只需要等它结束
+            await mgr.DownloadAsync(card.Name);
         }
         finally
         {
-            _busy = false;
-            btn.IsEnabled = true;
-            bar.Visibility = Visibility.Collapsed;
-            // 重新构建卡片，让徽标/按钮状态同步
-            Dispatcher.BeginInvoke(new Action(Refresh), System.Windows.Threading.DispatcherPriority.Background);
+            Apply(card);
+            UpdateHint();
         }
+    }
+
+    private void OnDeleteClick(CardUi card)
+    {
+        var mgr = ServiceHub.Models;
+        if (mgr == null) return;
+
+        if (!_confirmDelete.Contains(card.Name))
+        {
+            _confirmDelete.Add(card.Name);
+            Apply(card);            // 第一次点：变成"确认删除/确认清除"
+            return;
+        }
+
+        _confirmDelete.Remove(card.Name);
+        if (mgr.Exists(card.Name)) mgr.Delete(card.Name);
+        else mgr.ClearPartial(card.Name);
+        Apply(card);
+        UpdateHint();
     }
 
     // ---------------- 小工具 ----------------
 
-    private static Border Badge(string text, Color bg, Color fg) => new()
+    private static void StyleButton(Button b, bool accent)
     {
-        Margin = new Thickness(6, 0, 0, 0),
-        Padding = new Thickness(6, 0, 6, 1),
-        CornerRadius = new CornerRadius(7),
-        Background = new SolidColorBrush(bg),
-        VerticalAlignment = VerticalAlignment.Center,
-        Child = new TextBlock
+        if (accent)
         {
-            Text = text,
-            FontSize = 10,
-            Foreground = new SolidColorBrush(fg),
-        },
-    };
+            b.SetResourceReference(Control.BackgroundProperty, "AppOn");
+            b.SetResourceReference(Control.ForegroundProperty, "AppOnFg");
+        }
+        else
+        {
+            b.SetResourceReference(Control.BackgroundProperty, "AppCard");
+            b.SetResourceReference(Control.ForegroundProperty, "AppText2");
+        }
+    }
 
-    private static Button SmallButton(string label, bool danger = false)
+    private static Button SmallButton(string label, bool accent = false)
     {
         var b = new Button
         {
             Content = label,
             Height = 24,
-            Padding = new Thickness(10, 0, 10, 0),
-            FontSize = 11.5,
-            Margin = new Thickness(6, 0, 0, 0),
+            Padding = new Thickness(9, 0, 9, 0),
+            FontSize = 11,
+            Margin = new Thickness(5, 0, 0, 0),
             FocusVisualStyle = null,
             Cursor = Cursors.Hand,
         };
         b.SetResourceReference(FrameworkElement.StyleProperty, "PillBtn");
-        if (danger)
-        {
-            b.SetResourceReference(Control.BackgroundProperty, "AppCard");
-            b.SetResourceReference(Control.ForegroundProperty, "AppText2");
-        }
+        StyleButton(b, accent);
         return b;
-    }
-
-    private static string FileSizeText(string path)
-    {
-        try
-        {
-            var mb = new FileInfo(path).Length / 1048576.0;
-            return $"已下载 · {mb:0.0} MB";
-        }
-        catch { return "已下载"; }
     }
 }

@@ -65,6 +65,7 @@ public partial class App : Application
             var notify = new NotifyService(config);
             var radio = new RadioService();
             var wordbook = new WordbookService(config);
+            var models = new ModelManager(config);
 
             ServiceHub.Config = config;
             ServiceHub.Clipboard = clipboard;
@@ -77,6 +78,7 @@ public partial class App : Application
             ServiceHub.Notify = notify;
             ServiceHub.Radio = radio;
             ServiceHub.Wordbook = wordbook;
+            ServiceHub.Models = models;
             ServiceHub.Audio = new AudioService();
             ServiceHub.Brightness = new BrightnessService();
             _translate = translate;

@@ -53,6 +53,7 @@ public partial class TranslatePage : UserControl
         ServiceHub.Live.Error += OnError;
         ServiceHub.Live.RunningChanged += OnRunning;
         ServiceHub.Live.DownloadingChanged += OnDownloading;
+        if (ServiceHub.Models != null) ServiceHub.Models.Changed += OnModelChanged;
     }
 
     private void Detach()
@@ -69,6 +70,7 @@ public partial class TranslatePage : UserControl
         ServiceHub.Live.Error -= OnError;
         ServiceHub.Live.RunningChanged -= OnRunning;
         ServiceHub.Live.DownloadingChanged -= OnDownloading;
+        if (ServiceHub.Models != null) ServiceHub.Models.Changed -= OnModelChanged;
         _levelTimer.Stop();
     }
 
@@ -81,12 +83,17 @@ public partial class TranslatePage : UserControl
         PaneText.Visibility = Visibility.Collapsed;
         PaneLive.Visibility = Visibility.Collapsed;
         PaneWords.Visibility = Visibility.Collapsed;
+        ModelsPane.Visibility = Visibility.Collapsed;
 
         switch (tag)
         {
             case "0": PaneText.Visibility = Visibility.Visible; break;
             case "1": PaneLive.Visibility = Visibility.Visible; break;
             case "2": PaneWords.Visibility = Visibility.Visible; RefreshWords(); break;
+            case "3":
+                ModelsPane.Visibility = Visibility.Visible;
+                ModelsPane.Refresh();          // 按服务当前状态重建（下载中也能看到实时进度）
+                break;
         }
 
         UpdateLayout();
@@ -98,6 +105,12 @@ public partial class TranslatePage : UserControl
     public void ShowLive()
     {
         TabLive.IsChecked = true;
+    }
+
+    /// <summary>切到「模型」分段（调试入口 --page:model 与设置页跳转用）。</summary>
+    public void ShowModels()
+    {
+        TabModels.IsChecked = true;
     }
 
     // ---------------- 文本翻译 ----------------
@@ -178,6 +191,14 @@ public partial class TranslatePage : UserControl
     {
         try
         {
+            // 正在下载模型时按钮变成「取消下载」：真正中断下载（.part 保留可续传）
+            if (ServiceHub.Models?.AnyDownloading == true)
+            {
+                ServiceHub.Models.CancelAll();
+                LiveStatus.Text = "已取消模型下载（已下部分保留，可在「模型」里继续）";
+                return;
+            }
+
             if (ServiceHub.Live.Running) await ServiceHub.Live.StopAsync();
             else await ServiceHub.Live.StartAsync();
             RefreshListenButton();
@@ -191,8 +212,9 @@ public partial class TranslatePage : UserControl
     private void RefreshListenButton()
     {
         var running = ServiceHub.Live.Running;
-        BtnListen.Content = running ? "停止聆听" : "开始聆听";
-        BtnListen.Style = (Style)FindResource(running ? "PillBtn" : "PrimaryBtn");
+        var downloading = ServiceHub.Models?.AnyDownloading == true;
+        BtnListen.Content = downloading ? "取消下载" : running ? "停止聆听" : "开始聆听";
+        BtnListen.Style = (Style)FindResource(downloading || !running ? "PrimaryBtn" : "PillBtn");
     }
 
     private void BtnClearSub_Click(object sender, RoutedEventArgs e)
@@ -262,8 +284,18 @@ public partial class TranslatePage : UserControl
 
     private void OnRunning(object? sender, bool on) => Dispatcher.Invoke(RefreshListenButton);
 
-    private void OnDownloading(object? sender, bool on) => Dispatcher.Invoke(() =>
-        BtnListen.Content = on ? "取消下载" : (ServiceHub.Live.Running ? "停止聆听" : "开始聆听"));
+    private void OnDownloading(object? sender, bool on) => Dispatcher.Invoke(RefreshListenButton);
+
+    /// <summary>模型下载状态变化（可能来自「模型」分段或实时字幕自动下载）。</summary>
+    private void OnModelChanged(string model) => Dispatcher.BeginInvoke(new Action(() =>
+    {
+        RefreshListenButton();
+        if (ServiceHub.Models?.AnyDownloading == true)
+        {
+            var st = ServiceHub.Models.StateOf(model);
+            if (st.Running) LiveStatus.Text = $"下载模型 {st.Progress:P0} · {st.Message}";
+        }
+    }), DispatcherPriority.Background);
 
     private void RefreshSubs()
     {
