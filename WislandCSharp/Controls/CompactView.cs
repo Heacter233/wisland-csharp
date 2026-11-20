@@ -70,9 +70,90 @@ public sealed class CompactView : FrameworkElement
     public Lyrics? Lyrics { get; set; }
 
     public bool SubOn { get; set; }
-    public string SubJp { get; set; } = "";
-    public string SubZh { get; set; } = "";
+
+    /// <summary>收起态保留最近两段字幕（上一条 + 当前），这样新一句出现时上一句还在。</summary>
+    private sealed class SubEntry
+    {
+        public string Sid = "";
+        public string Jp = "";
+        public string Zh = "";
+        public bool Placeholder;
+    }
+
+    private const int SubKeep = 2;
+    private readonly List<SubEntry> _subs = new();
     private DateTime _subT = DateTime.UtcNow.AddDays(-1);
+
+    public string SubJp => _subs.Count > 0 ? _subs[^1].Jp : "";
+    public string SubZh => _subs.Count > 0 ? _subs[^1].Zh : "";
+
+    /// <summary>新识别出一句原文（Segment 事件）。</summary>
+    public void PushSegment(string sid, string jp)
+    {
+        jp = OneLine(jp);
+        if (jp.Length == 0) return;
+
+        if (_subs.Count > 0 && _subs[^1].Sid == sid)
+        {
+            _subs[^1].Jp = jp;
+            _subs[^1].Placeholder = false;
+        }
+        else if (_subs.Count > 0 && _subs[^1].Placeholder)
+        {
+            _subs[^1].Sid = sid;
+            _subs[^1].Jp = jp;
+            _subs[^1].Placeholder = false;
+        }
+        else
+        {
+            _subs.Add(new SubEntry { Sid = sid, Jp = jp });
+            while (_subs.Count > SubKeep) _subs.RemoveAt(0);
+        }
+        _subT = DateTime.UtcNow;
+    }
+
+    /// <summary>某一句的译文（LiveZh / FinalZh 事件）。</summary>
+    public void SetSegmentZh(string sid, string zh)
+    {
+        zh = OneLine(zh);
+        if (zh.Length == 0) return;
+        for (var i = _subs.Count - 1; i >= 0; i--)
+        {
+            if (_subs[i].Sid == sid) { _subs[i].Zh = zh; break; }
+        }
+        _subT = DateTime.UtcNow;
+    }
+
+    /// <summary>语音开始占位（Partial）；空串表示清掉占位，不覆盖已识别原文。</summary>
+    public void SetPartial(string jp)
+    {
+        if (string.IsNullOrEmpty(jp))
+        {
+            if (_subs.Count > 0 && _subs[^1].Placeholder) _subs.RemoveAt(_subs.Count - 1);
+            return;
+        }
+
+        if (_subs.Count > 0 && _subs[^1].Sid.Length == 0 && _subs[^1].Zh.Length == 0)
+        {
+            _subs[^1].Jp = jp;
+            _subs[^1].Placeholder = true;
+        }
+        else if (_subs.Count == 0)
+        {
+            _subs.Add(new SubEntry { Jp = jp, Placeholder = true });
+        }
+        else if (_subs[^1].Zh.Length == 0)
+        {
+            _subs[^1].Jp = jp;
+        }
+        _subT = DateTime.UtcNow;
+    }
+
+    public void ClearSubs()
+    {
+        _subs.Clear();
+        _subT = DateTime.UtcNow.AddDays(-1);
+    }
 
     public double Peak { get; set; }
     public bool Near { get; set; }
@@ -126,20 +207,13 @@ public sealed class CompactView : FrameworkElement
         return m;
     }
 
-    private bool SubActive() => SubOn && (SubJp.Length > 0 || SubZh.Length > 0) &&
+    private bool SubActive() => SubOn && _subs.Count > 0 &&
                                 (SubHold <= 0 || (DateTime.UtcNow - _subT).TotalSeconds < SubHold);
-
-    public void SetSub(string? jp = null, string? zh = null)
-    {
-        if (jp != null) SubJp = jp;
-        if (zh != null) SubZh = zh;
-        _subT = DateTime.UtcNow;
-    }
 
     public void SetSubRunning(bool on)
     {
         SubOn = on;
-        if (!on) { SubJp = SubZh = ""; _subT = DateTime.UtcNow.AddDays(-1); }
+        if (!on) ClearSubs();
     }
 
     public bool Playing => Media.HasSession && Media.Playing && Media.Title.Length > 0;
@@ -173,55 +247,44 @@ public sealed class CompactView : FrameworkElement
         return View;
     }
 
-    // ---------------- 收起态字幕布局 ----------------
+    // ---------------- 收起态字幕（最近两段） ----------------
+
+    private const double SubJpLine = 16;
+    private const double SubZhLine = 20;
+    private const double SubEntryGap = 6;
+    private const double SubPad = 12;
 
     private static string OneLine(string? text) =>
         string.Join(" ", (text ?? "").Split(new[] { ' ', '\t', '\n', '\r' },
             StringSplitOptions.RemoveEmptyEntries));
 
-    /// <summary>在给定宽度内测量文本换行后的高度（行数上限 2，即原文/译文各最多 2 行）。</summary>
-    private static double WrappedHeight(string text, double px, FontWeight weight, double maxWidth)
+    /// <summary>单行放不下时截断并加省略号（保留句子前半段）。</summary>
+    private static string Fit(string? text, double px, FontWeight weight, double maxWidth)
     {
         var t = OneLine(text);
-        if (t.Length == 0) return 0;
-        var ft = Text.Build(t, px, weight, Brushes.Transparent);
-        ft.MaxTextWidth = Math.Max(10, maxWidth);
-        var lineH = Math.Max(px + 4, ft.Height);
-        var lines = Math.Max(1, (int)Math.Round(ft.Height / lineH));
-        lines = Math.Min(2, lines);
-        return lines * lineH;
+        if (t.Length == 0 || maxWidth <= 0) return "";
+        if (Text.Width(t, px, weight) <= maxWidth) return t;
+        while (t.Length > 1 && Text.Width(t[..^1] + "…", px, weight) > maxWidth) t = t[..^1];
+        return t + "…";
     }
 
-    /// <summary>收起态字幕卡片的宽高：宽度随文本增长（640~760），高度按行数增长（64~112）。</summary>
+    /// <summary>收起态字幕卡片尺寸：宽度按文本 640→760，高度按段数（1~2 段 = 2~4 行）。</summary>
     private (double W, double H) SubSize()
     {
-        var jp = OneLine(SubJp);
-        var zh = OneLine(SubZh);
-        if (zh.Length == 0) zh = "…";
+        if (_subs.Count == 0) return (WSubMin, HSubMin);
 
-        var textW = Math.Max(
-            Text.Width(jp, 12, FontWeights.Normal),
-            Text.Width(zh, 15, FontWeights.DemiBold));
-        var w = Anim.Clamp(textW + 52 + (BadgeCount() > 0 ? BadgeWidth : 0), WSubMin, WSubMax);
+        var badges = BadgeCount() > 0 ? BadgeWidth : 0;
+        var textW = 0.0;
+        foreach (var e in _subs)
+        {
+            textW = Math.Max(textW, Text.Width(OneLine(e.Jp), 12, FontWeights.Normal));
+            textW = Math.Max(textW, Text.Width(OneLine(e.Zh), 15, FontWeights.DemiBold));
+        }
 
-        var inner = Math.Max(80, w - 52 - (BadgeCount() > 0 ? BadgeWidth : 0));
-        var jpH = WrappedHeight(jp, 12, FontWeights.Normal, inner);
-        var zhH = WrappedHeight(zh, 15, FontWeights.DemiBold, inner);
-        var h = 12 + Math.Max(14, jpH) + 6 + zhH + 12;
+        var w = Anim.Clamp(textW + 52 + badges, WSubMin, WSubMax);
+        var n = _subs.Count;
+        var h = SubPad * 2 + n * (SubJpLine + SubZhLine) + (n - 1) * SubEntryGap;
         return (w, Math.Clamp(h, HSubMin, HSubMax));
-    }
-
-    /// <summary>绘制一个自动换行的文本块（居中）。</summary>
-    private static void DrawWrapped(DrawingContext dc, string text, double px, FontWeight weight,
-        Color color, double x, double y, double maxWidth, double maxHeight)
-    {
-        var t = OneLine(text);
-        if (t.Length == 0 || maxWidth <= 0 || maxHeight <= 0) return;
-        var ft = Text.Build(t, px, weight, new SolidColorBrush(color));
-        ft.MaxTextWidth = Math.Max(10, maxWidth);
-        ft.MaxTextHeight = Math.Max(px + 2, maxHeight);
-        ft.TextAlignment = TextAlignment.Center;
-        dc.DrawText(ft, new Point(x, y));
     }
 
     // ---------------- 尺寸 ----------------
@@ -333,22 +396,28 @@ public sealed class CompactView : FrameworkElement
 
         var x = r.X + 18;
         var w = r.Width - 36 - (BadgeCount() > 0 ? BadgeWidth : 0);
-        if (w < 60) return;
+        if (w < 60 || _subs.Count == 0) return;
 
-        var jp = OneLine(SubJp);
-        var zh = OneLine(SubZh);
-        if (zh.Length == 0) zh = "…";
-
-        var inner = Math.Max(60, w);
-        var jpLineH = 16.0;
-        var zhLineH = 20.0;
-        var jpH = Math.Min(2 * jpLineH, Math.Max(jpLineH, WrappedHeight(jp, 12, FontWeights.Normal, inner)));
-        var zhH = Math.Min(2 * zhLineH, Math.Max(zhLineH, WrappedHeight(zh, 15, FontWeights.DemiBold, inner)));
-        var total = jpH + 6 + zhH;
-
+        var n = _subs.Count;
+        var total = n * (SubJpLine + SubZhLine) + (n - 1) * SubEntryGap;
         var y = r.Y + (r.Height - total) / 2;
-        DrawWrapped(dc, jp, 12, FontWeights.Normal, Themes.Text(0.62 * a), x, y, inner, jpH);
-        DrawWrapped(dc, zh, 15, FontWeights.DemiBold, Themes.Text(a), x, y + jpH + 6, inner, zhH);
+
+        for (var i = 0; i < n; i++)
+        {
+            var e = _subs[i];
+            var current = i == n - 1;
+            var alpha = current ? a : a * 0.55;
+            var jp = current ? e.Jp : OneLine(e.Jp);
+            var zh = e.Zh.Length > 0 ? e.Zh : "…";
+
+            Text.Draw(dc, Fit(jp, 12, FontWeights.Normal, w), 12, FontWeights.Normal,
+                Themes.Text(0.62 * alpha), new Rect(x, y, w, SubJpLine), TextAlign.Center);
+            Text.Draw(dc, Fit(zh, 15, current ? FontWeights.DemiBold : FontWeights.Medium, w),
+                15, current ? FontWeights.DemiBold : FontWeights.Medium,
+                Themes.Text(alpha), new Rect(x, y + SubJpLine, w, SubZhLine), TextAlign.Center);
+
+            y += SubJpLine + SubZhLine + SubEntryGap;
+        }
     }
 
     private void PaintNoMedia(DrawingContext dc, Rect r, double a)

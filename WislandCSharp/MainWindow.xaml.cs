@@ -882,30 +882,22 @@ public partial class MainWindow : Window
             });
             ServiceHub.Live.Partial += (_, jp) => Dispatcher.Invoke(() =>
             {
-                if (string.IsNullOrEmpty(jp))
-                {
-                    // 一句话结束：只有当前还停留在"…"占位时才清掉；不要覆盖已识别好的原文
-                    if (_compact.SubJp == "…" || _compact.SubJp.Length == 0)
-                        _compact.SetSub(jp: "");
-                    return;
-                }
-
-                _compact.SetSub(jp: jp);
+                _compact.SetPartial(jp);
                 _chrome.RetargetCompact();
             });
             ServiceHub.Live.Segment += (_, s) => Dispatcher.Invoke(() =>
             {
                 SyncSubHold();
-                _compact.SetSub(jp: s.jp);
+                _compact.PushSegment(s.sid, s.jp);
                 _chrome.RetargetCompact();
             });
             ServiceHub.Live.LiveZh += (_, s) => Dispatcher.Invoke(() =>
             {
                 SyncSubHold();
-                _compact.SetSub(zh: s.zh);
+                _compact.SetSegmentZh(s.sid, s.zh);
                 _chrome.RetargetCompact();
             });
-            ServiceHub.Live.FinalZh += (_, s) => Dispatcher.Invoke(() => _compact.SetSub(zh: s.zh));
+            ServiceHub.Live.FinalZh += (_, s) => Dispatcher.Invoke(() => _compact.SetSegmentZh(s.sid, s.zh));
             ServiceHub.Live.Level += (_, v) => { };
         });
 
