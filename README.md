@@ -61,6 +61,8 @@ a67256d  feat(live): 实时字幕实装为纯 C# 离线管线（音频捕获 + V
 > 等下一轮打包时统一升到 v0.2.1。
 
 - **翻译多引擎**：新增 Index-Translate（B站免费 API）/ 智谱 GLM-4-Flash / Google / Bing，主引擎失败自动回退；手动翻译与实时字幕共用引擎链（设置页可切换与测试）。
+- **anime-whisper 句首 S 修复**：该模型训练语料带说话人/台本标记，句首常多出一个 `S`（如「S魔物である…」）。
+  现在仅对 anime 模型、且 `S` 后紧跟日文/引号时自动去掉（保留 `S級` / `Sランク` / `SS` 等合法词），设置页可关（`live.asr.anime_strip_s`）。
 - **实时字幕音频修复**：回环捕获电平本来就低（实测约 1/3），原先没有增益、VAD 又是固定阈值 0.012，导致「只有很大声才识别」。
   现在加入 AGC 自动增益（目标约 -20dBFS）+ 峰值归一化 + 自适应噪声底阈值，并修复切句索引在裁剪缓冲后错位（导致每句只剩 40ms）的问题。
 - **人声处理链路**：原始音频 → **DPDFNet2 降噪 / GTCRN / VoxLock 目标说话人提取** → 电平归一化 → VAD → ASR；
@@ -263,7 +265,7 @@ WASAPI 回环   →   DPDFNet2/GTCRN 降噪    →   -22dBFS       →   自适�
 | 音频源 | **系统音频回环**（看视频/游戏）或**麦克风**（会议），设置页切换 |
 | 采样 | 统一重采样为 16kHz 单声道（回环原始 48k 立体声 → 下混 + 线性重采样） |
 | **引擎选择** | `live.asr.engine`：`auto`（SenseVoice 已下载就优先，否则 Whisper）/ `sensevoice` / `whisper`；SenseVoice 加载失败自动回退 Whisper |
-| **模型** | SenseVoice：`sensevoice`（226MB，ONNX；中文/英文快，**日语实测较弱**，日语请用 Whisper）；Whisper：`tiny 75MB` / `base 142MB` / `small 466MB` / `turbo 547MB`（多语，需 GPU）/ `anime 1.4GB`（仅日语，需 GPU） |
+| **模型** | SenseVoice：`sensevoice`（226MB，ONNX；中文/英文快，**日语实测较弱**，日语请用 Whisper）；Whisper：`tiny 75MB` / `base 142MB` / `small 466MB` / `turbo 547MB`（多语，需 GPU）/ `anime 1.4GB`（仅日语，需 GPU；自动清理句首 S 标记） |
 | **GPU** | `live.asr.gpu`：`auto`（Vulkan 优先）/ `off` / `vulkan` / `cuda`；Vulkan 对 AMD/Intel/NVIDIA 都可用，CUDA 需自备运行库（未随包），失败自动回退 CPU |
 | **人声处理** | `live.enhance.mode`：`off` / `dpdfnet`（推荐，去 BGM/噪声、保留所有人声）/ `gtcrn`（轻量）/ `voxlock`（只保留锁定的第一个说话人，多人对话会丢台词）；`live.enhance.normalize` 把增强后电平拉回 ~-22dBFS |
 | **切句上限** | `live.vad.max_segment_ms` 默认 **12000**（原 6000；长句不再被截断） |

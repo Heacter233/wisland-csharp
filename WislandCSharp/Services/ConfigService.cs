@@ -116,6 +116,8 @@ public class ConfigService : IConfigService
                 // 语言：auto / ja / en / zh；GPU：auto / off / vulkan / cuda；线程：0 = 自动
                 ["engine"] = "auto", ["model"] = "auto", ["language"] = "auto",
                 ["gpu"] = "auto", ["threads"] = 0,
+                // anime-whisper 训练语料带的句首 "S" 标记：默认清理
+                ["anime_strip_s"] = true,
             },
             ["translate"] = new Dictionary<string, object?>
             {

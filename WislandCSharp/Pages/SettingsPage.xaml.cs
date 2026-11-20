@@ -215,6 +215,10 @@ public partial class SettingsPage : UserControl
             new[] { "自动（中文/英文→SenseVoice，日语→Whisper）", "SenseVoice（中文/英文快）", "Whisper（日语推荐）" },
             cfg.Get("live.asr.engine", "auto")));
 
+        AddCard(liveSec, CardToggle("清理 anime-whisper 句首 S", "live.asr.anime_strip_s",
+            cfg.Get("live.asr.anime_strip_s", true),
+            "anime-whisper 训练数据带说话人标记，句首常多出一个 S（如「S魔物である…」）；开启后自动去掉，不影响 Sランク 等合法词。重启字幕生效"));
+
         AddCard(liveSec, CardChoice("识别模型（Whisper）", "live.asr.model",
             new[] { "auto", "tiny", "base", "small", "turbo", "anime" },
             new[] { "自动", "tiny 75MB", "base 142MB", "small 466MB",

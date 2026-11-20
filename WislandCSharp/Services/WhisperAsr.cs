@@ -337,10 +337,69 @@ public sealed class WhisperAsr : IDisposable
         await foreach (var result in processor.ProcessAsync(wav, ct))
         {
             var text = result.Text?.Trim() ?? "";
-            if (text.Length > 0) sb.Append(text);
+            if (text.Length == 0) continue;
+            // 逐段清理：模型可能把一整句切成多段，每段都可能带句首 S 标记
+            if (StripAnimePrefix &&
+                string.Equals(_currentModel, "anime", StringComparison.OrdinalIgnoreCase))
+                text = StripAnimeSpeakerMarker(text);
+            sb.Append(text);
         }
-        return sb.ToString().Trim();
+
+        var text0 = sb.ToString().Trim();
+        if (StripAnimePrefix &&
+            string.Equals(_currentModel, "anime", StringComparison.OrdinalIgnoreCase))
+            text0 = StripAnimeSpeakerMarker(text0);
+
+        return text0;
     }
+
+    /// <summary>
+    /// anime-whisper 的训练语料（Galgame 台本）带有说话人/台本前缀标记，
+    /// 模型经常会在句首多输出一个 "S"（如 "S魔物であることが…"）。
+    /// 这里只在该模型下、且 "S" 后面紧跟日文（汉字/平假名）或引号时去掉，
+    /// 保留 "Sランク" / "SS" / "S級" 这类合法的字母开头的词。
+    /// </summary>
+    private static string StripAnimeSpeakerMarker(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length < 2) return text;
+        var t = text.TrimStart();
+        if (t[0] != 'S') return text;
+
+        // 兼容 "S 魔物…" 这种带空格的变体（trim 掉 S 之后的空白）
+        var body = t[1..].TrimStart();
+        if (body.Length == 0) return text;
+
+        var next = body[0];
+        var japanese = (next >= '\u3040' && next <= '\u30ff') ||
+                       (next >= '\u4e00' && next <= '\u9fff') || next == '々';
+        var quote = next == '「' || next == '『' || next == '"' || next == '“';
+        if (!japanese && !quote) return text;
+
+        // 片假名开头（Sランク / Sクラス）大概率是合法词，保留
+        if (next >= '\u30a0' && next <= '\u30ff') return text;
+
+        // 常见合法复合词：S級 / Sランク / Sクラス / Sサイズ …（汉字开头也要保留）
+        var rest = body;
+        foreach (var legit in AnimeLegitSPrefixes)
+        {
+            if (rest.StartsWith(legit, StringComparison.Ordinal)) return text;
+        }
+
+        // 引号前是对话开始，去掉 S 更安全
+        if (quote) return rest;
+        // 其余汉字/平假名开头：判定为语料标记
+        return rest;
+    }
+
+    /// <summary>合法的 "S+词" 前缀（等级/排名类），这些不当作语料标记清理。</summary>
+    private static readonly string[] AnimeLegitSPrefixes =
+    {
+        "級", "ランク", "クラス", "サイズ", "カップ", "ランキング",
+        "タイプ", "チーム", "シリーズ", "システム",
+    };
+
+    /// <summary>是否清理 anime-whisper 的句首 S 标记（默认开，可在设置里关）。</summary>
+    public bool StripAnimePrefix { get; set; } = true;
 
     /// <summary>确保模型已加载；返回工厂实例。</summary>
     private WhisperFactory? EnsureFactory(string? modelName)

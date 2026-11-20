@@ -141,6 +141,7 @@ public sealed class AsrService : IDisposable
 
             var asr = new WhisperAsr(_store.Dir);
             asr.SetThreads(_cfg.Get("live.asr.threads", 0));
+            asr.StripAnimePrefix = _cfg.Get("live.asr.anime_strip_s", true);
             asr.UseModel(modelKey);
             _whisper = asr;
             Engine = AsrModels.FamilyWhisper;
