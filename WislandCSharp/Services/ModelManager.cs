@@ -116,6 +116,7 @@ public sealed class ModelManager
     {
         try { if (File.Exists(PathOf(model))) File.Delete(PathOf(model)); }
         catch { }
+        ResetTransient(model);
         Raise(model);
     }
 
@@ -124,7 +125,21 @@ public sealed class ModelManager
     {
         try { if (File.Exists(PartPathOf(model))) File.Delete(PartPathOf(model)); } catch { }
         try { if (File.Exists(PartPathOf(model) + ".total")) File.Delete(PartPathOf(model) + ".total"); } catch { }
+        ResetTransient(model);
         Raise(model);
+    }
+
+    /// <summary>清掉"上次下载留下的"提示文字，避免删完还显示"已取消（已缓存 …）"。</summary>
+    private void ResetTransient(string model)
+    {
+        var st = StateOf(model);
+        if (st.Running) return;
+        st.Progress = 0;
+        st.Bytes = 0;
+        st.Total = 0;
+        st.Message = "";
+        st.Error = "";
+        st.Canceled = false;
     }
 
     // ---------------- 状态 ----------------
