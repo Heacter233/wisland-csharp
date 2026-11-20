@@ -871,19 +871,37 @@ public partial class MainWindow : Window
                 ServiceHub.Config.Get("live.audio.source", "loopback"),
                 ServiceHub.Config.Get("live.audio.device", ""),
                 ServiceHub.Config.Get("live.audio.block_ms", 80));
-            ServiceHub.Live.RunningChanged += (_, on) => Dispatcher.Invoke(() => _compact.SetSubRunning(on));
+            // 收起态字幕停留时间：0 = 一直显示到停止聆听
+            void SyncSubHold() => _compact.SubHold = ServiceHub.Config.Get("live.collapsed_hold_s", 0.0);
+            SyncSubHold();
+
+            ServiceHub.Live.RunningChanged += (_, on) => Dispatcher.Invoke(() =>
+            {
+                SyncSubHold();
+                _compact.SetSubRunning(on);
+            });
             ServiceHub.Live.Partial += (_, jp) => Dispatcher.Invoke(() =>
             {
+                if (string.IsNullOrEmpty(jp))
+                {
+                    // 一句话结束：只有当前还停留在"…"占位时才清掉；不要覆盖已识别好的原文
+                    if (_compact.SubJp == "…" || _compact.SubJp.Length == 0)
+                        _compact.SetSub(jp: "");
+                    return;
+                }
+
                 _compact.SetSub(jp: jp);
                 _chrome.RetargetCompact();
             });
             ServiceHub.Live.Segment += (_, s) => Dispatcher.Invoke(() =>
             {
+                SyncSubHold();
                 _compact.SetSub(jp: s.jp);
                 _chrome.RetargetCompact();
             });
             ServiceHub.Live.LiveZh += (_, s) => Dispatcher.Invoke(() =>
             {
+                SyncSubHold();
                 _compact.SetSub(zh: s.zh);
                 _chrome.RetargetCompact();
             });

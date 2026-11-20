@@ -51,9 +51,14 @@ public sealed class CompactView : FrameworkElement
     public const double HIdle = 34;
     public const double HMedia = 36;
     public const double HAct = 40;
-    public const double HSub = 60;
+    public const double HSub = 60;          // 单行原文+译文的最小高度
+    public const double HSubMin = 64;       // 收起态字幕最小高度
+    public const double HSubMax = 112;      // 最多 4 行（原文 2 + 译文 2）
+    public const double WSubMin = 640;      // 收起态字幕最小宽度
+    public const double WSubMax = 760;      // 最大宽度
     public const double WText = 640;
-    public const double SubHoldSeconds = 7.0;
+    /// <summary>字幕停留秒数；0 = 一直显示到停止聆听（旧行为是固定 7 秒后消失）。</summary>
+    public double SubHold { get; set; } = 0;
 
     private const string Views = "clock,pet,music";
 
@@ -112,12 +117,17 @@ public sealed class CompactView : FrameworkElement
             Act = null;
             m = View switch { "music" => "media", "pet" => "pet", _ => "idle" };
         }
-        if (m != _mode) { _mode = m; _modeT = now; }
+        if (m != _mode)
+        {
+            _mode = m;
+            _modeT = now;
+            try { Wisland.App.DebugNote($"[Compact] mode={m} SubOn={SubOn} jp={(SubJp.Length > 20 ? SubJp[..20] : SubJp)} zh={(SubZh.Length > 20 ? SubZh[..20] : SubZh)} hold={SubHold}"); } catch { }
+        }
         return m;
     }
 
     private bool SubActive() => SubOn && (SubJp.Length > 0 || SubZh.Length > 0) &&
-                                (DateTime.UtcNow - _subT).TotalSeconds < SubHoldSeconds;
+                                (SubHold <= 0 || (DateTime.UtcNow - _subT).TotalSeconds < SubHold);
 
     public void SetSub(string? jp = null, string? zh = null)
     {
@@ -163,6 +173,57 @@ public sealed class CompactView : FrameworkElement
         return View;
     }
 
+    // ---------------- 收起态字幕布局 ----------------
+
+    private static string OneLine(string? text) =>
+        string.Join(" ", (text ?? "").Split(new[] { ' ', '\t', '\n', '\r' },
+            StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>在给定宽度内测量文本换行后的高度（行数上限 2，即原文/译文各最多 2 行）。</summary>
+    private static double WrappedHeight(string text, double px, FontWeight weight, double maxWidth)
+    {
+        var t = OneLine(text);
+        if (t.Length == 0) return 0;
+        var ft = Text.Build(t, px, weight, Brushes.Transparent);
+        ft.MaxTextWidth = Math.Max(10, maxWidth);
+        var lineH = Math.Max(px + 4, ft.Height);
+        var lines = Math.Max(1, (int)Math.Round(ft.Height / lineH));
+        lines = Math.Min(2, lines);
+        return lines * lineH;
+    }
+
+    /// <summary>收起态字幕卡片的宽高：宽度随文本增长（640~760），高度按行数增长（64~112）。</summary>
+    private (double W, double H) SubSize()
+    {
+        var jp = OneLine(SubJp);
+        var zh = OneLine(SubZh);
+        if (zh.Length == 0) zh = "…";
+
+        var textW = Math.Max(
+            Text.Width(jp, 12, FontWeights.Normal),
+            Text.Width(zh, 15, FontWeights.DemiBold));
+        var w = Anim.Clamp(textW + 52 + (BadgeCount() > 0 ? BadgeWidth : 0), WSubMin, WSubMax);
+
+        var inner = Math.Max(80, w - 52 - (BadgeCount() > 0 ? BadgeWidth : 0));
+        var jpH = WrappedHeight(jp, 12, FontWeights.Normal, inner);
+        var zhH = WrappedHeight(zh, 15, FontWeights.DemiBold, inner);
+        var h = 12 + Math.Max(14, jpH) + 6 + zhH + 12;
+        return (w, Math.Clamp(h, HSubMin, HSubMax));
+    }
+
+    /// <summary>绘制一个自动换行的文本块（居中）。</summary>
+    private static void DrawWrapped(DrawingContext dc, string text, double px, FontWeight weight,
+        Color color, double x, double y, double maxWidth, double maxHeight)
+    {
+        var t = OneLine(text);
+        if (t.Length == 0 || maxWidth <= 0 || maxHeight <= 0) return;
+        var ft = Text.Build(t, px, weight, new SolidColorBrush(color));
+        ft.MaxTextWidth = Math.Max(10, maxWidth);
+        ft.MaxTextHeight = Math.Max(px + 2, maxHeight);
+        ft.TextAlignment = TextAlignment.Center;
+        dc.DrawText(ft, new Point(x, y));
+    }
+
     // ---------------- 尺寸 ----------------
     public (double W, double H) SizeHint()
     {
@@ -178,7 +239,8 @@ public sealed class CompactView : FrameworkElement
                             + Text.Width(Act.Sub, 12, FontWeights.Normal);
                 return (Anim.Clamp(w + 24, 220, 460), HAct);
             case "subtitle":
-                return (WText + nb * 12, HSub);
+                var (sw, sh) = SubSize();
+                return (sw + nb * 12, sh);
             case "media":
                 if (!Playing && Media.Title.Length == 0) return (190 + nb * 12, HMedia);
                 return (Math.Max(300, LyricsWidth) + 34 + nb * 12, HMedia);
@@ -267,29 +329,26 @@ public sealed class CompactView : FrameworkElement
 
     private void PaintSubtitle(DrawingContext dc, Rect r, double a)
     {
+        if (BadgeCount() > 0) DrawBadges(dc, r.Right - 14, r.Y + 16, a);
+
         var x = r.X + 18;
         var w = r.Width - 36 - (BadgeCount() > 0 ? BadgeWidth : 0);
-        if (BadgeCount() > 0) DrawBadges(dc, r.Right - 14, r.Y + 16, a);
-        var cy = r.Y + r.Height / 2;
+        if (w < 60) return;
 
-        string Tail(string text, double px, FontWeight weight)
-        {
-            var t = string.Join(" ", (text ?? "").Split(new[] { ' ', '\t', '\n', '\r' },
-                StringSplitOptions.RemoveEmptyEntries));
-            if (Text.Width(t, px, weight) <= w) return t;
-            // 保留结尾（最新的话）
-            while (t.Length > 1 && Text.Width("…" + t, px, weight) > w) t = t[1..];
-            return "…" + t;
-        }
-
-        var jp = Tail(SubJp, 12, FontWeights.Normal);
-        var zh = Tail(SubZh, 15, FontWeights.DemiBold);
+        var jp = OneLine(SubJp);
+        var zh = OneLine(SubZh);
         if (zh.Length == 0) zh = "…";
 
-        Text.Draw(dc, jp, 12, FontWeights.Normal, Themes.Text(0.62 * a),
-            new Rect(x, cy - 22, w, 18), TextAlign.Center);
-        Text.Draw(dc, zh, 15, FontWeights.DemiBold, Themes.Text(a),
-            new Rect(x, cy - 3, w, 24), TextAlign.Center);
+        var inner = Math.Max(60, w);
+        var jpLineH = 16.0;
+        var zhLineH = 20.0;
+        var jpH = Math.Min(2 * jpLineH, Math.Max(jpLineH, WrappedHeight(jp, 12, FontWeights.Normal, inner)));
+        var zhH = Math.Min(2 * zhLineH, Math.Max(zhLineH, WrappedHeight(zh, 15, FontWeights.DemiBold, inner)));
+        var total = jpH + 6 + zhH;
+
+        var y = r.Y + (r.Height - total) / 2;
+        DrawWrapped(dc, jp, 12, FontWeights.Normal, Themes.Text(0.62 * a), x, y, inner, jpH);
+        DrawWrapped(dc, zh, 15, FontWeights.DemiBold, Themes.Text(a), x, y + jpH + 6, inner, zhH);
     }
 
     private void PaintNoMedia(DrawingContext dc, Rect r, double a)

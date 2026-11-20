@@ -99,6 +99,8 @@ public class ConfigService : IConfigService
                 // 人声处理链路下默认关闭 AGC；需要时可手动打开
                 ["agc"] = false, ["gain"] = 1.0,
             },
+            // 收起态字幕：0 = 一直显示到停止聆听（旧行为固定 7 秒后消失）
+            ["collapsed_hold_s"] = 0.0,
             ["enhance"] = new Dictionary<string, object?>
             {
                 // mode: off / dpdfnet / gtcrn / voxlock；normalize 把增强后电平拉回 ~-22dBFS

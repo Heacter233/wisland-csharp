@@ -290,6 +290,10 @@ public partial class SettingsPage : UserControl
 
         AddCard(liveSec, BuildVadTuningGuideCard());
 
+        AddCard(liveSec, CardSlider("收起态字幕停留", "live.collapsed_hold_s", 0, 60, 5,
+            (int)Math.Round(cfg.Get("live.collapsed_hold_s", 0.0)),
+            v => v <= 0 ? "一直显示（直到停止聆听）" : $"{v} 秒后恢复默认收起内容"));
+
         // ===== 热键设置 =====
         var hotkey = AddSection("热键设置", "格式：修饰键+键名，如 Ctrl+Alt+W；改完立即重新注册");
 
@@ -1243,6 +1247,10 @@ public partial class SettingsPage : UserControl
             case "island.collapse_delay_ms":
                 cfg.Set<int>(key, int.TryParse(value, out var ms) ? ms : 0);
                 ServiceHub.RequestTimings?.Invoke();
+                break;
+
+            case "live.collapsed_hold_s":
+                cfg.Set<double>(key, double.TryParse(value, out var holdS) ? Math.Clamp(holdS, 0, 60) : 0.0);
                 break;
 
             case "live.vad.silence_ms":
