@@ -61,8 +61,17 @@ public class ConfigService : IConfigService
         },
         ["translate"] = new Dictionary<string, object?>
         {
+            // 当前引擎 + 回退链（按顺序尝试；需要 Key 的引擎未配置 Key 会自动跳过）
+            ["engine"] = "index",
+            ["fallback"] = "google",
+            // DeepSeek（保留原有字段）
             ["api_key"] = "", ["base_url"] = "https://api.deepseek.com",
             ["model"] = "deepseek-flash", ["import_from"] = "",
+            // 智谱 GLM-4-Flash（免费模型，需 Key）
+            ["zhipu_api_key"] = "", ["zhipu_model"] = "glm-4-flash",
+            // B站 Index-Translate（官方免费 API，免 Key）
+            ["index_base_url"] = "https://index-translate.bilibili.com/v1",
+            ["index_model"] = "Index-Translate-35B-A3B",
         },
         ["clipboard"] = new Dictionary<string, object?> { ["max"] = 10 },
         ["notify"] = new Dictionary<string, object?>

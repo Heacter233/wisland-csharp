@@ -52,7 +52,7 @@ public class LiveService : ILiveService, IDisposable
     private bool _running;
     private readonly object _runningLock = new();
 
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(12) };
+    // 翻译统一交给 ServiceHub.Translate（多引擎 + 回退链），本服务不再自己发翻译请求
 
     public event EventHandler<string>? Status;
     public event EventHandler<string>? Error;
@@ -395,9 +395,7 @@ public class LiveService : ILiveService, IDisposable
         return t;
     }
 
-    // ---------------- 翻译：DeepSeek → Google 兜底 ----------------
-
-    private DateTime _translateBlockedUntil = DateTime.MinValue;
+    // ---------------- 字幕翻译：统一走 ServiceHub.Translate 的引擎链 ----------------
 
     private async Task<string> TranslateAsync(string text, CancellationToken ct)
     {
@@ -405,80 +403,17 @@ public class LiveService : ILiveService, IDisposable
         if (text.Length == 0) return "";
 
         var target = Cfg("live.translate.target", "zh-CN");
-
-        // 1) DeepSeek（与翻译页共用配置）
-        var apiKey = Cfg("translate.api_key", "");
-        if (!string.IsNullOrWhiteSpace(apiKey))
-        {
-            try
-            {
-                var zh = await DeepSeekTranslateAsync(text, target, apiKey, ct);
-                if (zh.Length > 0) return zh;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("[LiveService] DeepSeek: " + ex.Message);
-            }
-        }
-
-        // 2) Google 非官方接口兜底
-        if (DateTime.UtcNow < _translateBlockedUntil) return "";
         try
         {
-            var q = Uri.EscapeDataString(text);
-            var url = $"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target}&dt=t&q={q}";
-            using var resp = await _http.GetAsync(url, ct);
-            if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-            {
-                _translateBlockedUntil = DateTime.UtcNow.AddMinutes(5);
-                return "";
-            }
-            if (!resp.IsSuccessStatusCode) return "";
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-            if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0) return "";
-
-            var sb = new StringBuilder();
-            foreach (var seg in doc.RootElement[0].EnumerateArray())
-            {
-                if (seg.ValueKind != JsonValueKind.Array || seg.GetArrayLength() == 0) continue;
-                if (seg[0].ValueKind == JsonValueKind.String) sb.Append(seg[0].GetString());
-            }
-            return sb.ToString().Trim();
+            // 引擎与回退链在 TranslationEngines 里统一配置（默认 Index-Translate 免 Key）
+            return await ServiceHub.Translate.TranslateOnceAsync(text, "auto", target, ct);
         }
-        catch { return ""; }
-    }
-
-    private async Task<string> DeepSeekTranslateAsync(string text, string target, string apiKey, CancellationToken ct)
-    {
-        var baseUrl = Cfg("translate.base_url", "https://api.deepseek.com").TrimEnd('/');
-        var model = Cfg("translate.model", "deepseek-flash");
-
-        var payload = new
+        catch (OperationCanceledException) { return ""; }
+        catch (Exception ex)
         {
-            model,
-            stream = false,
-            temperature = 0.2,
-            messages = new object[]
-            {
-                new { role = "system", content =
-                    "你是字幕翻译引擎。把用户给的字幕翻译成" +
-                    (target.StartsWith("zh") ? "简体中文" : target) +
-                    "。只输出译文本身：不要解释、不要引号、不要语言标注，保留原意与语气。" },
-                new { role = "user", content = text },
-            },
-        };
-
-        using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl + "/chat/completions");
-        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
-        req.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-
-        using var resp = await _http.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode) return "";
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-        if (!doc.RootElement.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0) return "";
-        if (!choices[0].TryGetProperty("message", out var msg)) return "";
-        if (!msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.String) return "";
-        return (content.GetString() ?? "").Trim();
+            Debug.WriteLine("[LiveService] 翻译失败: " + ex.Message);
+            return "";
+        }
     }
 
     public void Dispose()
@@ -487,7 +422,7 @@ public class LiveService : ILiveService, IDisposable
         {
             try { StopAsync(wait: true).Wait(3000); } catch { }
         }
-        try { _http.Dispose(); } catch { }
+
         try { _asrGate.Dispose(); } catch { }
     }
 }

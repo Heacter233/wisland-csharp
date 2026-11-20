@@ -162,13 +162,39 @@ public partial class SettingsPage : UserControl
             cfg.Get("weather.interval_min", 15), v => $"每 {v} 分钟"));
 
         // ===== 翻译设置 =====
-        var trans = AddSection("翻译设置", "DeepSeek 兼容接口，流式返回");
+        var trans = AddSection("翻译设置",
+            "多引擎：Index-Translate（免 Key）/ 智谱 GLM-4-Flash / DeepSeek / 免密钥网页接口；主引擎失败按回退顺序自动切换");
 
-        AddCard(trans, CardText("翻译模型名", "translate.model",
-            cfg.Get("translate.model", "deepseek-chat"), "DeepSeek 模型名"));
+        AddCard(trans, CardChoice("翻译引擎", "translate.engine",
+            new[] { "index", "zhipu", "deepseek", "google", "bing" },
+            new[] { "Index-Translate（免Key）", "智谱 GLM-4-Flash", "DeepSeek", "Google（免Key）", "Bing（免Key）" },
+            cfg.Get("translate.engine", "index")));
 
-        AddCard(trans, CardText("翻译 API Key", "translate.api_key",
-            cfg.Get("translate.api_key", ""), "留空则翻译不可用", secret: true));
+        AddCard(trans, CardText("回退顺序", "translate.fallback",
+            cfg.Get("translate.fallback", "google"),
+            "主引擎失败时按顺序尝试，逗号分隔：index,zhipu,deepseek,google,bing"));
+
+        AddCard(trans, CardText("Index 模型", "translate.index_model",
+            cfg.Get("translate.index_model", "Index-Translate-35B-A3B"),
+            "B站免费 API 可选：Index-Translate-35B-A3B / Index-Translate-9B / Index-Translate-2B"));
+
+        AddCard(trans, BuildZhipuGuideCard());
+
+        AddCard(trans, CardText("智谱 API Key", "translate.zhipu_api_key",
+            cfg.Get("translate.zhipu_api_key", ""),
+            "手机号注册智谱开放平台即可免费使用 GLM-4-Flash", secret: true));
+
+        AddCard(trans, CardText("智谱模型名", "translate.zhipu_model",
+            cfg.Get("translate.zhipu_model", "glm-4-flash"),
+            "免费模型：glm-4-flash / glm-4.7-flash"));
+
+        AddCard(trans, CardText("DeepSeek API Key", "translate.api_key",
+            cfg.Get("translate.api_key", ""), "留空则跳过 DeepSeek 引擎", secret: true));
+
+        AddCard(trans, CardText("DeepSeek 模型名", "translate.model",
+            cfg.Get("translate.model", "deepseek-flash"), "DeepSeek 模型名"));
+
+        AddCard(trans, BuildTranslateTestCard());
 
         // ===== 实时字幕 =====
         // 进程内管线：音频捕获（回环/麦克风）→ VAD 切句 → 离线 Whisper → 翻译
@@ -956,6 +982,74 @@ public partial class SettingsPage : UserControl
         };
         row.Children.Add(play);
         body.Children.Add(row);
+        return card;
+    }
+
+    /// <summary>智谱 GLM-4-Flash 免费额度的开通引导（手机号注册即可）。</summary>
+    private Border BuildZhipuGuideCard()
+    {
+        var card = BaseCard("智谱 GLM-4-Flash（免费）怎么开", "", out var body);
+        var tb = new TextBlock
+        {
+            Text = "1) 手机号注册智谱开放平台 open.bigmodel.cn（无需信用卡）\n"
+                 + "2) 控制台 → 项目管理 → API Keys → 新建，复制生成的 Key\n"
+                 + "3) 把 Key 填到下面「智谱 API Key」，引擎选「智谱 GLM-4-Flash」即可\n"
+                 + "免费模型：glm-4-flash（128K，最稳）/ glm-4.7-flash（200K，更新）\n"
+                 + "注意：免费模型有并发上限，字幕这种高频场景建议保留回退（默认回退 Google）。",
+            FontSize = 10.5,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        tb.SetResourceReference(TextBlock.ForegroundProperty, "AppText3");
+        body.Children.Add(tb);
+        return card;
+    }
+
+    /// <summary>测试当前引擎链：翻一句日语，显示耗时与结果。</summary>
+    private Border BuildTranslateTestCard()
+    {
+        var card = BaseCard("测试翻译", "用当前引擎（失败会自动回退）翻译一句日语，确认接口可用", out var body);
+        var result = new TextBlock
+        {
+            Text = "",
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        result.SetResourceReference(TextBlock.ForegroundProperty, "AppText2");
+
+        var btn = new Button
+        {
+            Content = "测试",
+            Height = 28,
+            Padding = new Thickness(12, 0, 12, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+        btn.SetResourceReference(FrameworkElement.StyleProperty, "PillBtn");
+        btn.Click += async (_, _) =>
+        {
+            btn.IsEnabled = false;
+            result.Text = "翻译中…";
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var zh = await ServiceHub.Translate.TranslateOnceAsync(
+                    "おはようございます。今日もよろしくお願いします。", "ja", "zh-CN");
+                sw.Stop();
+                result.Text = zh.Length > 0
+                    ? $"✓ {sw.ElapsedMilliseconds}ms：{zh}"
+                    : $"✗ 没有返回结果（{sw.ElapsedMilliseconds}ms）—— 检查引擎、Key 与网络";
+            }
+            catch (Exception ex)
+            {
+                result.Text = "✗ " + ex.Message;
+            }
+            finally { btn.IsEnabled = true; }
+        };
+
+        body.Children.Add(btn);
+        body.Children.Add(result);
         return card;
     }
 
