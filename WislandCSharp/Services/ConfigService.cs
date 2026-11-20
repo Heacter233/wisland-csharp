@@ -84,6 +84,20 @@ public class ConfigService : IConfigService
         {
             ["models_dir"] = "models",
             ["audio"] = new Dictionary<string, object?> { ["source"] = "loopback", ["device"] = "", ["block_ms"] = 80 },
+            ["asr"] = new Dictionary<string, object?>
+            {
+                // 模型：tiny / base / small；语言：auto / ja / en / zh
+                ["model"] = "auto", ["language"] = "auto",
+            },
+            ["vad"] = new Dictionary<string, object?>
+            {
+                ["threshold"] = 0.012, ["silence_ms"] = 450,
+                ["min_speech_ms"] = 300, ["max_segment_ms"] = 6000,
+            },
+            ["translate"] = new Dictionary<string, object?>
+            {
+                ["enabled"] = true, ["target"] = "zh-CN",
+            },
         },
     };
 

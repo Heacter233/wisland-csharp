@@ -170,6 +170,36 @@ public partial class SettingsPage : UserControl
         AddCard(trans, CardText("翻译 API Key", "translate.api_key",
             cfg.Get("translate.api_key", ""), "留空则翻译不可用", secret: true));
 
+        // ===== 实时字幕 =====
+        // 进程内管线：音频捕获（回环/麦克风）→ VAD 切句 → 离线 Whisper → 翻译
+        var liveSec = AddSection("实时字幕", "离线识别（Whisper），首次使用会下载模型");
+
+        AddCard(liveSec, CardChoice("音频来源", "live.audio.source",
+            new[] { "loopback", "mic" },
+            new[] { "系统音频", "麦克风" },
+            cfg.Get("live.audio.source", "loopback")));
+
+        AddCard(liveSec, CardChoice("识别语言", "live.asr.language",
+            new[] { "auto", "ja", "en", "zh" },
+            new[] { "自动", "日语", "英语", "中文" },
+            cfg.Get("live.asr.language", "auto")));
+
+        AddCard(liveSec, CardChoice("识别模型", "live.asr.model",
+            new[] { "auto", "tiny", "base", "small" },
+            new[] { "自动", "tiny 75MB", "base 142MB", "small 466MB" },
+            cfg.Get("live.asr.model", "auto")));
+
+        AddCard(liveSec, BuildModelDownloadCard(cfg.Get("live.asr.model", "auto")));
+
+        AddCard(liveSec, CardToggle("字幕翻译", "live.translate.enabled",
+            cfg.Get("live.translate.enabled", true),
+            "关闭后只显示识别原文；翻译优先用上面的 DeepSeek Key，未填则用免费接口兜底"));
+
+        AddCard(liveSec, CardChoice("译文语言", "live.translate.target",
+            new[] { "zh-CN", "zh-TW", "en" },
+            new[] { "简体中文", "繁体中文", "英语" },
+            cfg.Get("live.translate.target", "zh-CN")));
+
         // ===== 热键设置 =====
         var hotkey = AddSection("热键设置", "格式：修饰键+键名，如 Ctrl+Alt+W；改完立即重新注册");
 
@@ -699,6 +729,94 @@ public partial class SettingsPage : UserControl
         };
         body.Children.Add(track);
         return card;
+    }
+
+    /// <summary>
+    /// 实时字幕的语音模型卡片：显示当前模型是否已下载 + 手动下载/更新（带进度）。
+    ///
+    /// 首次点「开始聆听」也会自动下载；这个卡片用于提前下载或在网络恢复后重试。
+    /// </summary>
+    private Border BuildModelDownloadCard(string model)
+    {
+        var card = BaseCard("语音模型", "", out var body);
+
+        // "auto" 要解析成实际模型名，否则会显示"未下载：auto"这种误导信息
+        var resolved = Services.WhisperAsr.ResolveModel(model);
+        var dir = LiveModelsDir();
+        var asr = new Services.WhisperAsr(dir);
+        var status = new TextBlock
+        {
+            Text = asr.Exists(resolved)
+                ? $"已下载：{resolved}" + (resolved != model ? $"（由「{model}」自动选择）" : "") + $"\n{dir}"
+                : $"未下载：{resolved}" + (resolved != model ? $"（由「{model}」自动选择）" : "")
+                  + " · 首次使用会自动下载，也可点下面按钮提前下",
+            Style = (Style)FindResource("T3"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+        body.Children.Add(status);
+
+        var bar = new ProgressBar
+        {
+            Height = 4,
+            Margin = new Thickness(0, 8, 0, 0),
+            Minimum = 0,
+            Maximum = 1,
+            Visibility = Visibility.Collapsed,
+        };
+        body.Children.Add(bar);
+
+        var btn = new Button
+        {
+            Content = "下载 / 校验模型",
+            Height = 26,
+            Padding = new Thickness(12, 0, 12, 0),
+            FontSize = 12,
+            Margin = new Thickness(0, 8, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        btn.SetResourceReference(FrameworkElement.StyleProperty, "PillBtn");
+
+        btn.Click += async (_, _) =>
+        {
+            btn.IsEnabled = false;
+            bar.Visibility = Visibility.Visible;
+            try
+            {
+                var target = Services.WhisperAsr.ResolveModel(ServiceHub.Config.Get("live.asr.model", "auto"));
+                var dl = new Services.WhisperAsr(LiveModelsDir());
+                await dl.DownloadAsync(target, (p, msg) =>
+                {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        bar.Value = p;
+                        status.Text = $"下载中 {p:P0}  {msg}";
+                    }), System.Windows.Threading.DispatcherPriority.Background);
+                });
+                status.Text = $"已下载：{target}";
+            }
+            catch (Exception ex)
+            {
+                status.Text = "下载失败：" + ex.Message;
+            }
+            finally
+            {
+                bar.Visibility = Visibility.Collapsed;
+                btn.IsEnabled = true;
+            }
+        };
+        body.Children.Add(btn);
+
+        return card;
+    }
+
+    /// <summary>实时字幕模型目录：data/models（与 LiveService 保持一致）。</summary>
+    private static string LiveModelsDir()
+    {
+        var dir = ServiceHub.Config.Get("live.models_dir", "models");
+        if (string.IsNullOrWhiteSpace(dir)) dir = "models";
+        if (Path.IsPathRooted(dir)) return dir;
+        return Path.Combine(ServiceHub.Config.DataDir, dir);
     }
 
     private Border CardSlider(string title, string key, int min, int max, int step, int value,

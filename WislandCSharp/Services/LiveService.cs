@@ -2,27 +2,46 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Net.Sockets;
+using System.Linq;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Wisland.Services;
 
 namespace Wisland.Services;
 
 /// <summary>
-/// 实时字幕服务：通过 Python 后台进程进行 ASR 识别和翻译。
-/// 对应 Python live/service.py 中的 LiveService。
+/// 实时字幕服务：进程内完成 音频捕获 → VAD 切句 → 离线 ASR → 翻译。
+///
+/// 与旧实现的区别：不再启动 Python sidecar（仓库里从来没有对应的 asr_pipe.py），
+/// 改为纯 C#：
+///   - 音频：<see cref="AudioCapture"/>（WASAPI 回环 / 麦克风，统一 16k 单声道）
+///   - 识别：<see cref="WhisperAsr"/>（Whisper.net 离线模型，首次使用自动下载）
+///   - 翻译：DeepSeek（有 key 时）→ Google 非官方接口兜底（实测可用、免 key）
+///
+/// 对外事件与旧版保持一致，翻译页与收起态字幕无需改动。
 /// </summary>
 public class LiveService : ILiveService, IDisposable
 {
-    // 管道通信
-    private TcpClient? _tcpClient;
-    private StreamReader? _pipeReader;
-    private StreamWriter? _pipeWriter;
-    private Process? _asrProcess;
-    private readonly object _pipeLock = new();
+    // 采样参数
+    private const int SampleRate = AudioCapture.TargetRate;
+    private const int FrameMs = 30;
+    private const int FrameSize = SampleRate * FrameMs / 1000;   // 480
+
+    private AudioCapture? _capture;
+    private WhisperAsr? _asr;
+    private CancellationTokenSource? _cts;
+    private Task? _vadLoop;
+    private readonly SemaphoreSlim _asrGate = new(1, 1);
+
+    // VAD 状态
+    private readonly List<float> _buffer = new();
+    private int _framePos;
+    private int _speechFrom = -1;
+    private DateTime _lastVoiceAt = DateTime.MinValue;
+    private DateTime _speechStartAt = DateTime.MinValue;
+    private int _segmentId;
 
     // 配置
     private string _modelsDir = "models";
@@ -30,60 +49,26 @@ public class LiveService : ILiveService, IDisposable
     private string _audioDevice = "";
     private int _blockMs = 80;
 
-    // VAD 配置
-    private double _vadThreshold = 0.4;
-    private int _minSilenceMs = 350;
-    private int _minSpeechMs = 200;
-    private int _maxSegmentMs = 10000;
-
-    // ASR 配置
-    private bool _asrPartial = true;
-    private string _asrDraftMode = "rolling";
-    private int _draftIntervalMs = 500;
-    private int _draftThreads = 4;
-    private string _finalEngine = "parakeet";
-    private int _finalThreads = 6;
-    private bool _asrContextPrompt = false;
-
-    // 翻译配置
-    private bool _translateEnabled = true;
-    private bool _translateLive = true;
-    private int _liveMinIntervalMs = 900;
-    private int _liveMinNewChars = 4;
-    private int _contextLines = 3;
-
-    // 运行状态
     private bool _running;
     private readonly object _runningLock = new();
 
-    // 事件
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(12) };
+
     public event EventHandler<string>? Status;
     public event EventHandler<string>? Error;
-    public event EventHandler<string>? Partial;    // 正在说的日语（流式草稿）
-    public event EventHandler<(string sid, string jp)>? Segment;  // 整句日语
-    public event EventHandler<(string sid, string zh)>? LiveZh;   // 实时译文
-    public event EventHandler<(string sid, string zh)>? FinalZh;  // 最终译文
-    public event EventHandler<float>? Level;     // 音量 0~1
-    public event EventHandler<bool>? RunningChanged;  // 运行状态变化
-    public event EventHandler<bool>? DownloadingChanged;  // 模型下载状态
+    public event EventHandler<string>? Partial;
+    public event EventHandler<(string sid, string jp)>? Segment;
+    public event EventHandler<(string sid, string zh)>? LiveZh;
+    public event EventHandler<(string sid, string zh)>? FinalZh;
+    public event EventHandler<float>? Level;
+    public event EventHandler<bool>? RunningChanged;
+    public event EventHandler<bool>? DownloadingChanged;
 
-    /// <summary>
-    /// 是否正在运行
-    /// </summary>
     public bool Running
     {
-        get
-        {
-            lock (_runningLock)
-            {
-                return _running;
-            }
-        }
+        get { lock (_runningLock) return _running; }
     }
 
-    /// <summary>
-    /// 初始化 (从配置加载设置)
-    /// </summary>
     public void Initialize(string modelsDir = "models", string audioSource = "loopback",
         string audioDevice = "", int blockMs = 80)
     {
@@ -93,9 +78,20 @@ public class LiveService : ILiveService, IDisposable
         _blockMs = blockMs;
     }
 
+    /// <summary>配置读取（ServiceHub.Config 在启动后可用；缺失时用默认值）。</summary>
+    private static T Cfg<T>(string key, T fallback)
+    {
+        try
+        {
+            var cfg = ServiceHub.Config;
+            return cfg == null ? fallback : cfg.Get(key, fallback);
+        }
+        catch { return fallback; }
+    }
+
     /// <summary>
-    /// 启动实时字幕服务 (启动 Python ASR 后台进程)
-    /// </summary>
+    ///     // ---------------- 生命周期 ----------------
+
     public async Task StartAsync()
     {
         lock (_runningLock)
@@ -108,63 +104,69 @@ public class LiveService : ILiveService, IDisposable
         {
             RunningChanged?.Invoke(this, true);
 
-            // 查找 Python 解释器
-            var pythonExe = FindPythonExe();
-            if (pythonExe == null)
+            // 1) 模型目录：优先配置 live.models_dir，相对路径放 data/ 下
+            var modelsDir = _modelsDir;
+            if (string.IsNullOrWhiteSpace(modelsDir)) modelsDir = "models";
+            if (!Path.IsPathRooted(modelsDir))
             {
-                Error?.Invoke(this, "未找到 Python 解释器，请安装 Python");
-                return;
+                var dataDir = Cfg("app.data_dir", "");
+                var baseDir = string.IsNullOrWhiteSpace(dataDir)
+                    ? Path.Combine(AppContext.BaseDirectory, "data")
+                    : dataDir;
+                modelsDir = Path.Combine(baseDir, modelsDir);
             }
+            Directory.CreateDirectory(modelsDir);
 
-            // 构建启动参数
-            var asrScript = Path.Combine(_modelsDir, "..", "live", "asr_pipe.py");
-            if (!File.Exists(asrScript))
+            _asr = new WhisperAsr(modelsDir);
+            var model = WhisperAsr.ResolveModel(Cfg("live.asr.model", "auto"));
+            if (!_asr.Exists(model))
             {
-                // 尝试其他路径
-                asrScript = Path.Combine(AppContext.BaseDirectory, "live", "asr_pipe.py");
+                // 首次使用：应用内引导下载（带进度）
+                Status?.Invoke(this, $"首次使用：正在下载语音模型 {model}（{WhisperAsr.FileName(model)}）…");
+                DownloadingChanged?.Invoke(this, true);
+                try
+                {
+                    await _asr.DownloadAsync(model, (p, msg) =>
+                    {
+                        Status?.Invoke(this, $"下载模型 {p:P0}  {msg}");
+                    });
+                }
+                finally
+                {
+                    DownloadingChanged?.Invoke(this, false);
+                }
             }
+            _asr.UseModel(model);
 
-            var psi = new ProcessStartInfo
-            {
-                FileName = pythonExe,
-                Arguments = $"\"{asrScript}\" --models-dir \"{_modelsDir}\" --source \"{_audioSource}\"",
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = AppContext.BaseDirectory
-            };
+            // 2) 启动音频捕获
+            _capture = new AudioCapture();
+            _capture.Level += (_, v) => Level?.Invoke(this, v);
+            _capture.Samples += OnSamples;
 
-            _asrProcess = Process.Start(psi);
-            if (_asrProcess == null)
-            {
-                Error?.Invoke(this, "无法启动 ASR 后台进程");
-                return;
-            }
+            var source = Cfg("live.audio.source", _audioSource);
+            var deviceIdx = -1;
+            var devStr = Cfg("live.audio.device", _audioDevice);
+            if (int.TryParse(devStr, out var di)) deviceIdx = di;
+            _capture.Start(source, deviceIdx);
 
-            _pipeReader = new StreamReader(_asrProcess.StandardOutput.BaseStream, Encoding.UTF8);
-            _pipeWriter = new StreamWriter(_asrProcess.StandardInput.BaseStream, Encoding.UTF8) { AutoFlush = true };
+            // 3) VAD 循环
+            _cts = new CancellationTokenSource();
+            ResetVad();
+            _vadLoop = Task.Run(() => VadLoopAsync(_cts.Token));
 
-            // 启动读取线程
-            _ = Task.Run(ReadPipeLoopAsync);
-
-            Status?.Invoke(this, "实时字幕已启动");
+            Status?.Invoke(this, source == "mic"
+                ? "实时字幕已启动（麦克风）"
+                : "实时字幕已启动（系统音频）");
         }
         catch (Exception ex)
         {
             Error?.Invoke(this, ex.Message);
-            lock (_runningLock)
-            {
-                _running = false;
-            }
+            lock (_runningLock) _running = false;
             RunningChanged?.Invoke(this, false);
+            await SafeStopAsync();
         }
     }
 
-    /// <summary>
-    /// 停止实时字幕服务
-    /// </summary>
     public async Task StopAsync(bool wait = true)
     {
         lock (_runningLock)
@@ -175,32 +177,7 @@ public class LiveService : ILiveService, IDisposable
 
         try
         {
-            // 发送停止命令
-            lock (_pipeLock)
-            {
-                _pipeWriter?.WriteLine("STOP");
-                _pipeWriter?.Flush();
-            }
-
-            // 等待进程退出
-            if (_asrProcess != null && wait)
-            {
-                _asrProcess.WaitForExit(5000);
-                if (!_asrProcess.HasExited)
-                    _asrProcess.Kill();
-            }
-
-            _pipeReader?.Dispose();
-            _pipeWriter?.Dispose();
-            _tcpClient?.Dispose();
-            _asrProcess?.Dispose();
-
-            _pipeReader = null;
-            _pipeWriter = null;
-            _tcpClient = null;
-            _asrProcess = null;
-
-            RunningChanged?.Invoke(this, false);
+            await SafeStopAsync();
             Status?.Invoke(this, "实时字幕已停止");
         }
         catch (Exception ex)
@@ -209,156 +186,298 @@ public class LiveService : ILiveService, IDisposable
         }
     }
 
-    /// <summary>
-    /// 查找 Python 解释器
-    /// </summary>
-    private static string? FindPythonExe()
+    private async Task SafeStopAsync()
     {
-        // 优先查找项目 .venv
-        var venvPython = Path.Combine(AppContext.BaseDirectory, ".venv", "Scripts", "python.exe");
-        if (File.Exists(venvPython)) return venvPython;
+        try { _cts?.Cancel(); } catch { }
 
-        // 查找系统 python
-        foreach (var name in new[] { "python.exe", "pythonw.exe", "python3.exe" })
+        if (_capture != null)
+        {
+            _capture.Samples -= OnSamples;
+            try { _capture.Stop(); } catch { }
+            _capture.Dispose();
+            _capture = null;
+        }
+
+        if (_vadLoop != null && await Task.WhenAny(_vadLoop, Task.Delay(1500)) != _vadLoop)
+        {
+            // VAD 未及时退出：不阻塞关闭
+        }
+        _vadLoop = null;
+
+        _cts?.Dispose();
+        _cts = null;
+
+        try { _asr?.Dispose(); } catch { }
+        _asr = null;
+
+        RunningChanged?.Invoke(this, false);
+    }
+
+    public Task SendCommandAsync(string command, object? parameters = null)
+    {
+        // 目前只有开关类命令，配置改动走 config + 重启聆听
+        return Task.CompletedTask;
+    }
+
+    // ---------------- VAD + 切句 ----------------
+
+    private void ResetVad()
+    {
+        lock (_buffer)
+        {
+            _buffer.Clear();
+            _framePos = 0;
+            _speechFrom = -1;
+            _lastVoiceAt = DateTime.MinValue;
+        }
+    }
+
+    private void OnSamples(object? sender, float[] samples)
+    {
+        if (samples.Length == 0) return;
+        lock (_buffer) _buffer.AddRange(samples);
+    }
+
+    private async Task VadLoopAsync(CancellationToken ct)
+    {
+        var threshold = Math.Max(0.001, Cfg("live.vad.threshold", 0.012));
+        var silenceMs = Math.Max(150, Cfg("live.vad.silence_ms", 450));
+        var minSpeechMs = Math.Max(120, Cfg("live.vad.min_speech_ms", 300));
+        var maxSegmentMs = Math.Max(2000, Cfg("live.vad.max_segment_ms", 12000));
+
+        while (!ct.IsCancellationRequested)
         {
             try
             {
-                var psi = new ProcessStartInfo
+                var cutStart = -1;
+                var cutEnd = -1;
+
+                lock (_buffer)
                 {
-                    FileName = name,
-                    Arguments = "--version",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using var p = Process.Start(psi);
-                if (p != null && p.WaitForExit(3000))
-                    return name;
-            }
-            catch { }
-        }
-
-        return null;
-    }
-
-    private async Task ReadPipeLoopAsync()
-    {
-        try
-        {
-            while (_running && _pipeReader != null && !_pipeReader.EndOfStream)
-            {
-                var line = await _pipeReader.ReadLineAsync();
-                if (line == null) break;
-
-                try
-                {
-                    using var doc = JsonDocument.Parse(line);
-                    var root = doc.RootElement;
-
-                    if (root.TryGetProperty("type", out var type))
+                    while (_framePos + FrameSize <= _buffer.Count)
                     {
-                        var typeStr = type.GetString();
+                        var rms = Rms(_buffer, _framePos, FrameSize);
+                        var voice = rms >= threshold;
+                        var now = DateTime.UtcNow;
 
-                        switch (typeStr)
+                        if (voice)
                         {
-                            case "status":
-                                if (root.TryGetProperty("message", out var msg))
-                                    Status?.Invoke(this, msg.GetString() ?? "");
-                                break;
+                            if (_speechFrom < 0)
+                            {
+                                _speechFrom = _framePos;
+                                _speechStartAt = now;
+                                Partial?.Invoke(this, "…");
+                            }
+                            _lastVoiceAt = now;
+                        }
+                        else if (_speechFrom >= 0 && (now - _lastVoiceAt).TotalMilliseconds > silenceMs)
+                        {
+                            cutStart = _speechFrom;
+                            cutEnd = _framePos;
+                            _speechFrom = -1;
+                        }
 
-                            case "error":
-                                if (root.TryGetProperty("message", out var errMsg))
-                                    Error?.Invoke(this, errMsg.GetString() ?? "");
-                                break;
+                        _framePos += FrameSize;
 
-                            case "partial":
-                                if (root.TryGetProperty("text", out var partialText))
-                                    Partial?.Invoke(this, partialText.GetString() ?? "");
-                                break;
+                        if (cutStart >= 0) break;
 
-                            case "segment":
-                                var sid = root.TryGetProperty("sid", out var s) ? s.GetString() : "";
-                                var jp = root.TryGetProperty("text", out var t) ? t.GetString() : "";
-                                Segment?.Invoke(this, (sid ?? "", jp ?? ""));
-                                break;
-
-                            case "live_zh":
-                                var liveSid = root.TryGetProperty("sid", out var ls) ? ls.GetString() : "";
-                                var liveZh = root.TryGetProperty("text", out var lt) ? lt.GetString() : "";
-                                LiveZh?.Invoke(this, (liveSid ?? "", liveZh ?? ""));
-                                break;
-
-                            case "final_zh":
-                                var finalSid = root.TryGetProperty("sid", out var fs) ? fs.GetString() : "";
-                                var finalZh = root.TryGetProperty("text", out var ft) ? ft.GetString() : "";
-                                FinalZh?.Invoke(this, (finalSid ?? "", finalZh ?? ""));
-                                break;
-
-                            case "level":
-                                if (root.TryGetProperty("value", out var lvl))
-                                    Level?.Invoke(this, lvl.GetSingle());
-                                break;
-
-                            case "running_changed":
-                                if (root.TryGetProperty("value", out var rc))
-                                    RunningChanged?.Invoke(this, rc.GetBoolean());
-                                break;
-
-                            case "downloading_changed":
-                                if (root.TryGetProperty("value", out var dc))
-                                    DownloadingChanged?.Invoke(this, dc.GetBoolean());
-                                break;
+                        // 超长片段：强制切
+                        if (_speechFrom >= 0 && (now - _speechStartAt).TotalMilliseconds > maxSegmentMs)
+                        {
+                            cutStart = _speechFrom;
+                            cutEnd = _framePos;
+                            _speechFrom = -1;
+                            break;
                         }
                     }
+
+                    // 空闲时裁掉已处理数据，避免缓冲无限增长
+                    if (_speechFrom < 0 && _framePos > SampleRate * 2)
+                    {
+                        _buffer.RemoveRange(0, _framePos);
+                        _framePos = 0;
+                    }
                 }
-                catch
+
+                if (cutStart >= 0 && cutEnd > cutStart)
                 {
-                    // 跳过无法解析的行
+                    float[] segment;
+                    lock (_buffer)
+                    {
+                        var from = Math.Max(0, cutStart);
+                        var to = Math.Min(_buffer.Count, cutEnd);
+                        segment = _buffer.GetRange(from, to - from).ToArray();
+                    }
+
+                    var ms = segment.Length * 1000.0 / SampleRate;
+                    if (ms >= minSpeechMs) await HandleSegmentAsync(segment, ct);
+                    else Partial?.Invoke(this, "");
                 }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[LiveService] VAD: " + ex.Message);
+            }
+
+            try { await Task.Delay(50, ct); } catch { break; }
+        }
+    }
+
+    private static float Rms(List<float> buf, int offset, int count)
+    {
+        var sum = 0.0;
+        for (var i = 0; i < count; i++)
+        {
+            var s = buf[offset + i];
+            sum += s * s;
+        }
+        return (float)Math.Sqrt(sum / count);
+    }
+
+    private async Task HandleSegmentAsync(float[] samples, CancellationToken ct)
+    {
+        if (_asr == null) return;
+        var sid = (++_segmentId).ToString();
+
+        // 同一时刻只跑一次识别，避免 CPU 打满
+        if (!await _asrGate.WaitAsync(0, ct)) return;
+        try
+        {
+            var language = Cfg("live.asr.language", "auto");
+            var text = await _asr.TranscribeAsync(samples, language, ct);
+            text = Clean(text);
+            if (text.Length == 0) { Partial?.Invoke(this, ""); return; }
+
+            Segment?.Invoke(this, (sid, text));
+            Partial?.Invoke(this, "");
+
+            var zh = await TranslateAsync(text, ct);
+            if (zh.Length > 0)
+            {
+                LiveZh?.Invoke(this, (sid, zh));
+                FinalZh?.Invoke(this, (sid, zh));
             }
         }
         catch (Exception ex)
         {
-            Error?.Invoke(this, ex.Message);
+            Debug.WriteLine("[LiveService] ASR: " + ex.Message);
+            Error?.Invoke(this, "识别失败：" + ex.Message);
         }
         finally
         {
-            lock (_runningLock)
-            {
-                _running = false;
-            }
-            RunningChanged?.Invoke(this, false);
+            _asrGate.Release();
         }
     }
 
-    /// <summary>
-    /// 发送控制命令到 ASR 后台进程
-    /// </summary>
-    public async Task SendCommandAsync(string command, object? parameters = null)
+    /// <summary>过滤 whisper 的非语音标记（[音乐]、♪、(silence) 等）。</summary>
+    private static string Clean(string text)
     {
-        lock (_pipeLock)
-        {
-            if (_pipeWriter == null) return;
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        var t = text.Trim();
+        if (t.StartsWith("[") && t.EndsWith("]")) return "";
+        if (t.StartsWith("(") && t.EndsWith(")")) return "";
+        if (t.Trim('♪', ' ', '。', '.', '、').Length == 0) return "";
+        return t;
+    }
 
-            var msg = new { type = command, parameters };
-            var json = JsonSerializer.Serialize(msg);
-            _pipeWriter.WriteLine(json);
-            _pipeWriter.Flush();
+    // ---------------- 翻译：DeepSeek → Google 兜底 ----------------
+
+    private DateTime _translateBlockedUntil = DateTime.MinValue;
+
+    private async Task<string> TranslateAsync(string text, CancellationToken ct)
+    {
+        if (!Cfg("live.translate.enabled", true)) return "";
+        if (text.Length == 0) return "";
+
+        var target = Cfg("live.translate.target", "zh-CN");
+
+        // 1) DeepSeek（与翻译页共用配置）
+        var apiKey = Cfg("translate.api_key", "");
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            try
+            {
+                var zh = await DeepSeekTranslateAsync(text, target, apiKey, ct);
+                if (zh.Length > 0) return zh;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[LiveService] DeepSeek: " + ex.Message);
+            }
         }
+
+        // 2) Google 非官方接口兜底
+        if (DateTime.UtcNow < _translateBlockedUntil) return "";
+        try
+        {
+            var q = Uri.EscapeDataString(text);
+            var url = $"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target}&dt=t&q={q}";
+            using var resp = await _http.GetAsync(url, ct);
+            if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                _translateBlockedUntil = DateTime.UtcNow.AddMinutes(5);
+                return "";
+            }
+            if (!resp.IsSuccessStatusCode) return "";
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0) return "";
+
+            var sb = new StringBuilder();
+            foreach (var seg in doc.RootElement[0].EnumerateArray())
+            {
+                if (seg.ValueKind != JsonValueKind.Array || seg.GetArrayLength() == 0) continue;
+                if (seg[0].ValueKind == JsonValueKind.String) sb.Append(seg[0].GetString());
+            }
+            return sb.ToString().Trim();
+        }
+        catch { return ""; }
+    }
+
+    private async Task<string> DeepSeekTranslateAsync(string text, string target, string apiKey, CancellationToken ct)
+    {
+        var baseUrl = Cfg("translate.base_url", "https://api.deepseek.com").TrimEnd('/');
+        var model = Cfg("translate.model", "deepseek-flash");
+
+        var payload = new
+        {
+            model,
+            stream = false,
+            temperature = 0.2,
+            messages = new object[]
+            {
+                new { role = "system", content =
+                    "你是字幕翻译引擎。把用户给的字幕翻译成" +
+                    (target.StartsWith("zh") ? "简体中文" : target) +
+                    "。只输出译文本身：不要解释、不要引号、不要语言标注，保留原意与语气。" },
+                new { role = "user", content = text },
+            },
+        };
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl + "/chat/completions");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+        req.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+
+        using var resp = await _http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode) return "";
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        if (!doc.RootElement.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0) return "";
+        if (!choices[0].TryGetProperty("message", out var msg)) return "";
+        if (!msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.String) return "";
+        return (content.GetString() ?? "").Trim();
     }
 
     public void Dispose()
     {
-        if (_running)
+        if (Running)
         {
-            StopAsync(wait: true).Wait();
+            try { StopAsync(wait: true).Wait(3000); } catch { }
         }
+        try { _http.Dispose(); } catch { }
+        try { _asrGate.Dispose(); } catch { }
     }
 }
 
-/// <summary>
-/// 实时字幕服务接口
-/// </summary>
+/// <summary>实时字幕服务接口。</summary>
 public interface ILiveService
 {
     bool Running { get; }
