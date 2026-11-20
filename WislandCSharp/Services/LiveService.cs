@@ -30,6 +30,7 @@ public class LiveService : ILiveService, IDisposable
     private const int FrameSize = SampleRate * FrameMs / 1000;   // 480
 
     private AudioCapture? _capture;
+    private AudioEnhancer? _enhancer;
     private AsrService? _asr;
     private CancellationTokenSource? _cts;
     private Task? _vadLoop;
@@ -169,7 +170,48 @@ public class LiveService : ILiveService, IDisposable
                 return;
             }
 
-            // 2) 启动音频捕获
+            // 2) 人声处理（原始音频 → 增强 → VAD → ASR）
+            //    dpdfnet/gtcrn 降噪保留所有人声；voxlock 只保留锁定的说话人。
+            var enhanceMode = (Cfg("live.enhance.mode", "dpdfnet") ?? "off").Trim().ToLowerInvariant();
+            if (enhanceMode != AudioEnhancer.ModeOff)
+            {
+                var enhKey = AudioEnhancer.ModelKeyForMode(enhanceMode);
+                if (enhKey.Length > 0 && !store.Exists(enhKey))
+                {
+                    Status?.Invoke(this, $"首次使用：正在下载人声处理模型（{AsrModels.Find(enhKey)?.DisplayName ?? enhKey}）…");
+                    DownloadingChanged?.Invoke(this, true);
+                    bool enhOk;
+                    try
+                    {
+                        enhOk = await ServiceHub.Models.EnsureAsync(enhKey, p =>
+                            Status?.Invoke(this, $"下载人声模型 {p.Ratio:P0}  {p.Text}"));
+                    }
+                    finally { DownloadingChanged?.Invoke(this, false); }
+
+                    if (!enhOk)
+                    {
+                        Status?.Invoke(this, "人声处理模型未下载，已回退为「不处理」");
+                        enhanceMode = AudioEnhancer.ModeOff;
+                    }
+                }
+
+                if (enhanceMode != AudioEnhancer.ModeOff)
+                {
+                    _enhancer = new AudioEnhancer();
+                    var okEnh = _enhancer.Load(
+                        enhanceMode, modelsDir,
+                        Cfg("live.enhance.threads", 2),
+                        Cfg("live.enhance.voice_sample", ""),
+                        Cfg("live.enhance.normalize", true));
+                    if (!okEnh)
+                    {
+                        Status?.Invoke(this, $"人声处理加载失败（{_enhancer.Error}），已回退为「不处理」");
+                        _enhancer = null;
+                    }
+                }
+            }
+
+            // 3) 启动音频捕获
             _capture = new AudioCapture();
             _capture.Level += (_, v) => Level?.Invoke(this, v);
             _capture.Samples += OnSamples;
@@ -188,6 +230,7 @@ public class LiveService : ILiveService, IDisposable
             _vadLoop = Task.Run(() => VadLoopAsync(_cts.Token));
 
             var engineLabel = _asr?.EngineLabel ?? "离线识别";
+            if (_enhancer?.Active == true) engineLabel += " + " + AudioEnhancer.DisplayName(_enhancer.Mode);
             Status?.Invoke(this, source == "mic"
                 ? $"实时字幕已启动（麦克风 · {engineLabel}）"
                 : $"实时字幕已启动（系统音频 · {engineLabel}）");
@@ -241,6 +284,8 @@ public class LiveService : ILiveService, IDisposable
         _cts?.Dispose();
         _cts = null;
 
+        try { _enhancer?.Dispose(); } catch { }
+        _enhancer = null;
         try { _asr?.Dispose(); } catch { }
         _asr = null;
 
@@ -269,6 +314,15 @@ public class LiveService : ILiveService, IDisposable
     private void OnSamples(object? sender, float[] samples)
     {
         if (samples.Length == 0) return;
+
+        // 人声处理（流式，内部按帧缓存；可能返回空数组，表示还在攒帧）
+        if (_enhancer != null && _enhancer.Active)
+        {
+            try { samples = _enhancer.Process(samples); }
+            catch (Exception ex) { Debug.WriteLine("[LiveService] enhancer: " + ex.Message); }
+            if (samples.Length == 0) return;
+        }
+
         lock (_buffer) _buffer.AddRange(samples);
     }
 

@@ -63,6 +63,8 @@ a67256d  feat(live): 实时字幕实装为纯 C# 离线管线（音频捕获 + V
 - **翻译多引擎**：新增 Index-Translate（B站免费 API）/ 智谱 GLM-4-Flash / Google / Bing，主引擎失败自动回退；手动翻译与实时字幕共用引擎链（设置页可切换与测试）。
 - **实时字幕音频修复**：回环捕获电平本来就低（实测约 1/3），原先没有增益、VAD 又是固定阈值 0.012，导致「只有很大声才识别」。
   现在加入 AGC 自动增益（目标约 -20dBFS）+ 峰值归一化 + 自适应噪声底阈值，并修复切句索引在裁剪缓冲后错位（导致每句只剩 40ms）的问题。
+- **人声处理链路**：原始音频 → **DPDFNet2 降噪 / GTCRN / VoxLock 目标说话人提取** → 电平归一化 → VAD → ASR；
+  AGC/高通默认关闭；VAD 切句上限 6s→12s；人声处理模型按需下载（DPDFNet 10MB / GTCRN 0.5MB / VoxLock 74MB）。
 - **ASR 多引擎**：新增 **SenseVoice-Small**（sherpa-onnx / ONNX，CPU 极快，中/日/英/韩/粤）与 Whisper 家族新模型
   **large-v3-turbo**（q5 547MB）/ **anime-whisper**（1.4GB，日语动画特化）；Whisper 支持 **Vulkan / CUDA** GPU 加速开关；
   模型页按引擎家族分组，标注体积 / 语言 / 推荐硬件。
@@ -251,9 +253,9 @@ ServiceHub.Inbox.Push(new PluginMessage {
 翻译页「实时字幕」标签 + 收起态字幕胶囊，整条链路都在 C# 进程内完成，不依赖 Python：
 
 ```
-音频捕获          增益/归一            VAD 切句            离线识别                      翻译
-WASAPI 回环   →    AGC → -20dBFS   →   自适应噪声底     →   SenseVoice-Small / Whisper   →   多引擎链
-或 麦克风          + 峰值归一化          + 静音 450ms         (ONNX / GGML)                 (Index/智谱/DeepSeek/Google)
+音频捕获              人声处理                  电平归一化         VAD 切句              离线识别                    翻译
+WASAPI 回环   →   DPDFNet2/GTCRN 降噪    →   -22dBFS       →   自适应噪声底       →   SenseVoice / Whisper   →   多引擎链
+或 麦克风        或 VoxLock 目标说话人提取      （增强后放大）      + 静音 450ms           (ONNX / GGML)               (Index/智谱/DeepSeek/Google)
 ```
 
 | 项 | 说明 |
@@ -263,7 +265,10 @@ WASAPI 回环   →    AGC → -20dBFS   →   自适应噪声底     →   Sens
 | **引擎选择** | `live.asr.engine`：`auto`（SenseVoice 已下载就优先，否则 Whisper）/ `sensevoice` / `whisper`；SenseVoice 加载失败自动回退 Whisper |
 | **模型** | SenseVoice：`sensevoice`（226MB，ONNX；中文/英文快，**日语实测较弱**，日语请用 Whisper）；Whisper：`tiny 75MB` / `base 142MB` / `small 466MB` / `turbo 547MB`（多语，需 GPU）/ `anime 1.4GB`（仅日语，需 GPU） |
 | **GPU** | `live.asr.gpu`：`auto`（Vulkan 优先）/ `off` / `vulkan` / `cuda`；Vulkan 对 AMD/Intel/NVIDIA 都可用，CUDA 需自备运行库（未随包），失败自动回退 CPU |
-| **增益** | **AGC 自动增益**（默认开，目标约 -20dBFS，上限 16x）+ Whisper 前峰值归一化；回环捕获电平本来就只有音源的 ~1/3，不放大很容易漏识别 |
+| **人声处理** | `live.enhance.mode`：`off` / `dpdfnet`（推荐，去 BGM/噪声、保留所有人声）/ `gtcrn`（轻量）/ `voxlock`（只保留锁定的第一个说话人，多人对话会丢台词）；`live.enhance.normalize` 把增强后电平拉回 ~-22dBFS |
+| **切句上限** | `live.vad.max_segment_ms` 默认 **12000**（原 6000；长句不再被截断） |
+| **人声处理** | 默认 **DPDFNet2 降噪**（去 BGM/噪声、保留所有人声），可选 GTCRN / VoxLock；见 §15 |
+| **增益** | 增强后 **电平归一化**（目标约 -22dBFS，上限 12x）；AGC 默认关闭（保留开关）；Whisper 前还有峰值归一化保险 |
 | 切句 | 30ms 帧计算 RMS；**阈值自适应环境噪声底**（`max(0.006, 噪声底×2.5)`），静音 450ms 即切句，单句最长 6s |
 | 识别 | Whisper.net + GGML 模型，可选 `tiny 75MB / base 142MB / small 466MB`，「自动」按 CPU 核心数选择 |
 | 模型获取 | **首次点「开始聆听」自动下载**（优先 `hf-mirror.com`，失败回退 HuggingFace），带进度与 GGML 魔数校验；支持取消与断点续传，详见 §13 |
@@ -277,10 +282,10 @@ WASAPI 回环   →    AGC → -20dBFS   →   自适应噪声底     →   Sens
 ```
 延迟参考：tiny ≈ 2s / base ≈ 4s（从句子说完到字幕出现，主要花在 Whisper 推理上）。
 
-**识别不准 / 需要很大声时**：设置页 →「实时字幕」里有四个可调项（改完重启实时字幕生效）：
-`live.capture.agc` 自动增益（默认开）、`live.capture.gain` 手动增益（默认 1.0，可与 AGC 叠加）、
-`live.vad.adaptive` 自适应阈值（默认开）、`live.vad.threshold` 固定阈值下限（默认 0.006，越小越灵敏）。
-旧配置会自动迁移一次（把早期固定值 0.012 升级为 0.006 + 自适应）。
+**识别不准 / 需要很大声时**：设置页 →「实时字幕」可调（改完重启字幕生效）：
+`live.enhance.mode` 人声处理（默认 dpdfnet；嘈杂环境可试 gtcrn，单人场景才用 voxlock）、
+`live.enhance.normalize` 增强后归一化（默认开）、`live.vad.threshold` 固定阈值下限（默认 0.006，越小越灵敏）、
+`live.vad.adaptive` 自适应阈值（默认开）。旧配置会自动迁移一次（0.012→0.006、切句上限 6s→12s、人声处理默认 DPDFNet）。
 
 ### 13. 模型管理（翻译页 →「模型」分段）
 
@@ -288,7 +293,7 @@ WASAPI 回环   →    AGC → -20dBFS   →   自适应噪声底     →   Sens
 
 | 功能 | 说明 |
 | --- | --- |
-| 模型卡片 | 按引擎家族分组：**SenseVoice**（`sensevoice` 226MB）与 **Whisper**（`tiny/base/small/turbo/anime`）；显示体积、语言、推荐硬件、是否已下载、**使用中** / **已暂停** 徽标 |
+| 模型卡片 | 按引擎家族分组：**SenseVoice**（226MB）、**Whisper**（tiny/base/small/turbo/anime）、**人声处理**（DPDFNet2 10MB / GTCRN 0.5MB / VoxLock 74MB）；显示体积、语言、推荐硬件、是否已下载、**使用中** / **已暂停** 徽标 |
 | 下载 / 继续 / 重试 | 支持 **HTTP Range 断点续传**：取消、断网或关掉应用后 `.part` 保留，点「继续」从断点接着下，不再从 0 开始 |
 | 取消 | 下载中一键中断，已下部分保留（按钮在「取消 / 继续」之间切换） |
 | 进度不丢 | 下载任务与进度在 `ModelManager`（进程级服务）里，**切分段 / 切页面 / 重开窗口**都不会丢，回来按真实状态重建进度条 |
@@ -324,6 +329,22 @@ WASAPI 回环   →    AGC → -20dBFS   →   自适应噪声底     →   Sens
 - 设置 →「翻译设置」里有引擎选择、智谱开通引导、各引擎 Key/模型，以及**测试翻译**按钮（显示耗时与译文）
 
 > 免密钥网页接口（Google / Bing）是非官方通道，可能被限流或随页面改版失效；程序已做失败回退。
+
+### 15. 人声处理（降噪 / 目标说话人提取）
+
+实时字幕链路从「原始音频 → AGC/高通 → VAD」改成「**原始音频 → 人声处理 → 电平归一化 → VAD → ASR**」。
+
+| 后端 | 体积 | 说明 | 适用 |
+| --- | --- | --- | --- |
+| `dpdfnet` DPDFNet2 | 10 MB | 去背景音乐/噪声，保留**所有人声**；实测强 BGM 下识别明显变好（Whisper base：错误句 → 完全正确） | 影视 / 动画（默认） |
+| `gtcrn` | 0.5 MB | 轻量降噪，效果弱于 DPDFNet | 低配设备 |
+| `voxlock` | 74 MB | **目标说话人提取**：无音色样本时前 3 秒原样通过，之后只保留锁定的第一个说话人；多人对话会丢其他角色台词 | 单人解说 / 直播 / 通话 |
+
+- 配置：`live.enhance.mode`（off/dpdfnet/gtcrn/voxlock）、`live.enhance.normalize`（增强后电平归一化，默认开）、
+  `live.enhance.threads`（默认 2）、`live.enhance.voice_sample`（VoxLock 可选音色样本 wav）
+- 降噪会压低电平（实测 -8~18dB），归一化后 VAD 才能正常触发；因此 AGC 默认关闭（链路里保留开关，可手动打开）
+- 模型在「翻译 → 模型 → 人声处理」里下载；首次开始聆听也会自动下载当前模式所需模型
+- 实测（Win11 / 5800X3D）：DPDFNet RTF ≈ 0.13、GTCRN ≈ 0.07（CPU 2~4 线程），流式处理不拖慢识别
 
 ## 操作
 

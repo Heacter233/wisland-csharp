@@ -241,9 +241,28 @@ public partial class SettingsPage : UserControl
             new[] { "简体中文", "繁体中文", "英语" },
             cfg.Get("live.translate.target", "zh-CN")));
 
+        AddCard(liveSec, CardChoice("人声处理", "live.enhance.mode",
+            new[] { "off", "dpdfnet", "gtcrn", "voxlock" },
+            new[] { "关闭（原始音频）", "DPDFNet2 降噪（推荐）", "GTCRN 轻量降噪", "VoxLock 目标说话人（单人）" },
+            cfg.Get("live.enhance.mode", "dpdfnet")));
+
+        AddCard(liveSec, BuildEnhanceGuideCard());
+
+        AddCard(liveSec, CardText("音色样本（VoxLock 可选）", "live.enhance.voice_sample",
+            cfg.Get("live.enhance.voice_sample", ""),
+            "留空=VoxLock 自动锁定第一个说话人；填 3 秒以上语音 wav 可指定要保留的人声"));
+
+        AddCard(liveSec, CardText("人声处理线程数", "live.enhance.threads",
+            cfg.Get("live.enhance.threads", 2).ToString(),
+            "DPDFNet/GTCRN 建议 2；VoxLock 可调到 4；重启字幕生效"));
+
+        AddCard(liveSec, CardToggle("增强后电平归一化", "live.enhance.normalize",
+            cfg.Get("live.enhance.normalize", true),
+            "降噪会压低电平（实测 -8~18dB），归一化后 VAD 才不会漏句"));
+
         AddCard(liveSec, CardToggle("自动增益（AGC）", "live.capture.agc",
             cfg.Get("live.capture.agc", true),
-            "回环捕获电平偏低，开启后自动拉到约 -20 dBFS；关掉后只有很大的声音才触发。改动在重启实时字幕后生效"));
+            "人声处理链路下默认关闭（不需要 AGC）；仅在「人声处理=关闭」且音频很轻时打开。改动在重启实时字幕后生效"));
 
         AddCard(liveSec, CardText("手动增益", "live.capture.gain",
             cfg.Get("live.capture.gain", 1.0).ToString("0.###"),
@@ -1030,6 +1049,26 @@ public partial class SettingsPage : UserControl
                  + "3) 把 Key 填到下面「智谱 API Key」，引擎选「智谱 GLM-4-Flash」即可\n"
                  + "免费模型：glm-4-flash（128K，最稳）/ glm-4.7-flash（200K，更新）\n"
                  + "注意：免费模型有并发上限，字幕这种高频场景建议保留回退（默认回退 Google）。",
+            FontSize = 10.5,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        tb.SetResourceReference(TextBlock.ForegroundProperty, "AppText3");
+        body.Children.Add(tb);
+        return card;
+    }
+
+    /// <summary>人声处理说明卡：解释三种后端的区别（VoxLock 只保留一个人声）。</summary>
+    private Border BuildEnhanceGuideCard()
+    {
+        var card = BaseCard("人声处理怎么选", "", out var body);
+        var tb = new TextBlock
+        {
+            Text = "处理链：原始音频 → 人声处理 → VAD 切句 → 语音识别。\n"
+                 + "• DPDFNet2：去背景音乐/噪声，保留所有人声（影视/动画推荐，实测强 BGM 下识别明显变好）\n"
+                 + "• GTCRN：0.5MB 轻量降噪，效果弱于 DPDFNet，适合低配\n"
+                 + "• VoxLock：目标说话人提取，只保留锁定的第一个说话人——多人对话会丢其他角色台词，仅适合单人解说/直播/通话\n"
+                 + "模型在「翻译 → 模型 → 人声处理」里下载（DPDFNet 10MB / GTCRN 0.5MB / VoxLock 74MB）。",
             FontSize = 10.5,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 8, 0, 0),

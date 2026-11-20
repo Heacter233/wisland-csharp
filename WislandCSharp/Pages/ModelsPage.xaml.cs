@@ -130,7 +130,7 @@ public partial class ModelsPage : UserControl
 
         CardStack.Children.Clear();
         _cards.Clear();
-        foreach (var family in new[] { AsrModels.FamilySenseVoice, AsrModels.FamilyWhisper })
+        foreach (var family in new[] { AsrModels.FamilySenseVoice, AsrModels.FamilyWhisper, AsrModels.FamilyEnhance })
         {
             var header = new TextBlock
             {
@@ -293,7 +293,17 @@ public partial class ModelsPage : UserControl
         {
             if (!ServiceHub.Models.Exists(card.Name)) return;
             var info = AsrModels.Find(card.Name);
-            if (info != null && info.Family == AsrModels.FamilySenseVoice)
+            if (info != null && info.Family == AsrModels.FamilyEnhance)
+            {
+                ServiceHub.Config.Set("live.enhance.mode", card.Name switch
+                {
+                    "dpdfnet2" => "dpdfnet",
+                    "gtcrn" => "gtcrn",
+                    "voxlock" => "voxlock",
+                    _ => "off",
+                });
+            }
+            else if (info != null && info.Family == AsrModels.FamilySenseVoice)
             {
                 ServiceHub.Config.Set("live.asr.engine", "sensevoice");
             }
@@ -329,8 +339,12 @@ public partial class ModelsPage : UserControl
         var st = mgr.StateOf(name);
         var exists = mgr.Exists(name);
         var partial = mgr.PartialBytes(name);
-        var resolved = CurrentModelKey();
-        var isCurrent = string.Equals(name, resolved, StringComparison.OrdinalIgnoreCase);
+        var info = AsrModels.Find(name);
+        var isCurrent = info?.Family == AsrModels.FamilyEnhance
+            ? string.Equals(ServiceHub.Config.Get("live.enhance.mode", "dpdfnet"),
+                name switch { "dpdfnet2" => "dpdfnet", _ => name },
+                StringComparison.OrdinalIgnoreCase)
+            : string.Equals(name, CurrentModelKey(), StringComparison.OrdinalIgnoreCase);
         var confirming = _confirmDelete.Contains(name);
 
         // 徽标

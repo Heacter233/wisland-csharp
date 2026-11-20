@@ -96,13 +96,18 @@ public class ConfigService : IConfigService
             ["audio"] = new Dictionary<string, object?> { ["source"] = "loopback", ["device"] = "", ["block_ms"] = 80 },
             ["capture"] = new Dictionary<string, object?>
             {
-                // 回环捕获电平偏低，默认开自动增益；手动增益用于特殊情况
-                ["agc"] = true, ["gain"] = 1.0,
+                // 人声处理链路下默认关闭 AGC；需要时可手动打开
+                ["agc"] = false, ["gain"] = 1.0,
+            },
+            ["enhance"] = new Dictionary<string, object?>
+            {
+                // mode: off / dpdfnet / gtcrn / voxlock；normalize 把增强后电平拉回 ~-22dBFS
+                ["mode"] = "dpdfnet", ["normalize"] = true, ["threads"] = 2, ["voice_sample"] = "",
             },
             ["vad"] = new Dictionary<string, object?>
             {
                 ["threshold"] = 0.006, ["adaptive"] = true, ["migrated"] = false,
-                ["silence_ms"] = 450, ["min_speech_ms"] = 300, ["max_segment_ms"] = 6000,
+                ["silence_ms"] = 450, ["min_speech_ms"] = 300, ["max_segment_ms"] = 12000,
                 ["preroll_ms"] = 300,
             },
             ["asr"] = new Dictionary<string, object?>
@@ -145,6 +150,31 @@ public class ConfigService : IConfigService
         }
         LoadFromDisk();
         MigrateLiveVadDefaults();
+        MigrateEnhanceDefaults();
+    }
+
+    /// <summary>
+    /// 一次性迁移：升级到「原始音频 → 人声处理 → VAD → ASR」链路。
+    /// 老配置没有 live.enhance.*，这里补默认（DPDFNet）、关闭 AGC、把切句上限 6s 提到 12s。
+    /// </summary>
+    private void MigrateEnhanceDefaults()
+    {
+        try
+        {
+            if (Get("live.enhance.migrated", false)) return;
+
+            if (Get("live.enhance.mode", "") == "") Set("live.enhance.mode", "dpdfnet");
+            Set("live.enhance.normalize", Get("live.enhance.normalize", true));
+            Set("live.enhance.threads", Get("live.enhance.threads", 2));
+            Set("live.capture.agc", false);
+            if (Math.Abs(Get("live.vad.max_segment_ms", 0.0) - 6000) < 1e-6)
+                Set("live.vad.max_segment_ms", 12000);
+
+            Set("live.enhance.migrated", true);
+            Save();
+            Debug.WriteLine("[Config] 已迁移到人声处理链路（DPDFNet）");
+        }
+        catch (Exception ex) { Debug.WriteLine("[Config] 人声链路迁移失败: " + ex.Message); }
     }
 
     /// <summary>

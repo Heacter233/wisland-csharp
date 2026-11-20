@@ -41,6 +41,7 @@ public static class AsrModels
 {
     public const string FamilyWhisper = "whisper";
     public const string FamilySenseVoice = "sensevoice";
+    public const string FamilyEnhance = "enhance";
 
     private const string WhisperRepo = "ggerganov/whisper.cpp";
     private const string AnimeRepo = "Jaffe2718/ggml-whisper-unofficial";
@@ -51,6 +52,13 @@ public static class AsrModels
     {
         $"https://hf-mirror.com/{repo}/resolve/main/{file}",
         $"https://huggingface.co/{repo}/resolve/main/{file}",
+    };
+
+    /// <summary>GitHub Release 直链（带一个公共镜像回退，方便国内网络）。</summary>
+    private static string[] GithubUrls(string repo, string tag, string file) => new[]
+    {
+        $"https://github.com/{repo}/releases/download/{tag}/{file}",
+        $"https://ghproxy.net/https://github.com/{repo}/releases/download/{tag}/{file}",
     };
 
     private static AsrModelFile WhisperFile(string key, string remote, long size) => new()
@@ -133,6 +141,62 @@ public static class AsrModels
                 },
             },
         },
+
+        // ---------------- 语音增强 / 人声处理（sherpa-onnx speech enhancement）----------------
+        new()
+        {
+            Key = "dpdfnet2", Family = FamilyEnhance, DisplayName = "DPDFNet2 降噪",
+            Note = "去除背景音乐/噪声、保留所有人声；实测强 BGM 下识别明显变好（影视推荐）",
+            Languages = "—", HardwareHint = "CPU 即可（实测 RTF ≈ 0.13）",
+            SizeMb = 10,
+            Files = new[]
+            {
+                new AsrModelFile
+                {
+                    LocalPath = Path.Combine("enhance", "dpdfnet2.onnx"),
+                    Urls = GithubUrls("k2-fsa/sherpa-onnx", "speech-enhancement-models", "dpdfnet2.onnx"),
+                    SizeBytes = 10249356,
+                },
+            },
+        },
+        new()
+        {
+            Key = "gtcrn", Family = FamilyEnhance, DisplayName = "GTCRN 降噪（轻量）",
+            Note = "0.5MB 轻量降噪，效果弱于 DPDFNet，适合低配设备",
+            Languages = "—", HardwareHint = "CPU 即可（实测 RTF ≈ 0.07）",
+            SizeMb = 1,
+            Files = new[]
+            {
+                new AsrModelFile
+                {
+                    LocalPath = Path.Combine("enhance", "gtcrn_simple.onnx"),
+                    Urls = GithubUrls("k2-fsa/sherpa-onnx", "speech-enhancement-models", "gtcrn_simple.onnx"),
+                    SizeBytes = 535638,
+                },
+            },
+        },
+        new()
+        {
+            Key = "voxlock", Family = FamilyEnhance, DisplayName = "VoxLock 目标说话人提取",
+            Note = "只保留锁定到的第一个说话人，其他角色台词会被压制（单人解说/通话适用，多人对话不适用）",
+            Languages = "—", HardwareHint = "CPU 可实时（27M 参数因果模型）",
+            RecommendGpu = false, SizeMb = 74,
+            Files = new[]
+            {
+                new AsrModelFile
+                {
+                    LocalPath = Path.Combine("enhance", "voxlock_enroll.onnx"),
+                    Urls = GithubUrls("arbazsiddiqui/voxlock", "sherpa-onnx-models-v2", "voxlock_enroll.onnx"),
+                    SizeBytes = 21024406,
+                },
+                new AsrModelFile
+                {
+                    LocalPath = Path.Combine("enhance", "voxlock_chunk_int8.onnx"),
+                    Urls = GithubUrls("arbazsiddiqui/voxlock", "sherpa-onnx-models-v2", "voxlock_chunk_int8.onnx"),
+                    SizeBytes = 56561266,
+                },
+            },
+        },
     };
 
     public static AsrModelInfo? Find(string? key) =>
@@ -154,7 +218,10 @@ public static class AsrModels
         return Environment.ProcessorCount >= 8 ? "base" : "tiny";
     }
 
-    public static string FamilyName(string family) => family == FamilySenseVoice
-        ? "SenseVoice（ONNX / sherpa-onnx）"
-        : "Whisper（GGML / Whisper.net）";
+    public static string FamilyName(string family) => family switch
+    {
+        FamilySenseVoice => "SenseVoice（ONNX / sherpa-onnx）",
+        FamilyEnhance => "人声处理（降噪 / 目标说话人提取）",
+        _ => "Whisper（GGML / Whisper.net）",
+    };
 }
