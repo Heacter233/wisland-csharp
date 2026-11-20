@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -161,7 +162,9 @@ public class WeatherService : IWeatherService, IDisposable
                 var part = await QueryGeoAsync(q, q == raw ? 15 : 6);
                 if (part != null) list.AddRange(part);
             }
-            if (list.Count == 0) return list;
+
+            // 注意：这里不能因为 list 为空就提前 return —— 那会让 Nominatim 兜底永远走不到
+            // （中文区县/县级市在 Open-Meteo 里就是 0 条）。
 
             // 去重（同一坐标只留一条）
             var deduped = new List<WeatherGeoResult>();
@@ -174,12 +177,126 @@ public class WeatherService : IWeatherService, IDisposable
 
             // 按 行政级别 + 人口 + 本国 排序：地级市/省会排在同名小村庄前面
             deduped.Sort((a, b) => Score(b, isCjk).CompareTo(Score(a, isCjk)));
-            return deduped;
+            if (deduped.Count > 0) return deduped;
+
+            // Open-Meteo 的地名库对中文区县/县级市覆盖很差（昆山市、常熟市等直接 0 条），
+            // 这时用 OSM Nominatim 兜底：它收录了中文行政区名。
+            return await QueryNominatimAsync(cityName);
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[WeatherService] SearchCity: {ex.Message}");
             return null;
+        }
+    }
+
+    // ---------------- Nominatim（OSM）中文地名兜底 ----------------
+
+    private const string NominatimApi = "https://nominatim.openstreetmap.org/search";
+    private static DateTime _lastNominatim = DateTime.MinValue;
+    private static readonly SemaphoreSlim _nominatimLock = new(1, 1);
+
+    /// <summary>
+    /// 用 OpenStreetMap Nominatim 查地名。
+    /// 使用条款要求：可识别 UA、每秒最多 1 次请求 —— 这里用信号量 + 间隔保证，
+    /// 且只在用户「添加城市」时触发，不参与日常轮询。
+    /// </summary>
+    private async Task<List<WeatherGeoResult>?> QueryNominatimAsync(string name)
+    {
+        await _nominatimLock.WaitAsync();
+        try
+        {
+            var wait = 1100 - (DateTime.UtcNow - _lastNominatim).TotalMilliseconds;
+            if (wait > 0) await Task.Delay((int)wait);
+
+            var url = $"{NominatimApi}?q={Uri.EscapeDataString(name)}"
+                    + "&format=jsonv2&limit=8&accept-language=zh-CN&addressdetails=1";
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.UserAgent.Clear();
+            req.Headers.UserAgent.ParseAdd("Wisland/0.2 (Windows desktop widget; +https://github.com/Heacter233/wisland-csharp)");
+            req.Headers.Accept.ParseAdd("application/json");
+            req.Headers.AcceptLanguage.ParseAdd("zh-CN,zh;q=0.9");
+
+            using var resp = await _http.SendAsync(req);
+            _lastNominatim = DateTime.UtcNow;
+            if (!resp.IsSuccessStatusCode) return null;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+
+            var list = new List<WeatherGeoResult>();
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (!e.TryGetProperty("lat", out var latEl) || !e.TryGetProperty("lon", out var lonEl)) continue;
+                if (!double.TryParse(latEl.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var lat)) continue;
+                if (!double.TryParse(lonEl.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var lon)) continue;
+
+                var address = e.TryGetProperty("address", out var a) && a.ValueKind == JsonValueKind.Object
+                    ? a : default;
+
+                string Addr(string key)
+                {
+                    if (address.ValueKind != JsonValueKind.Object) return "";
+                    return address.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
+                        ? v.GetString() ?? "" : "";
+                }
+
+                // 名称优先级：市 > 县/区 > 镇 > 村；display_name 首段作为最终兜底
+                var city = Addr("city");
+                var county = Addr("county");
+                var town = Addr("town");
+                var municipality = Addr("municipality");
+                var display = e.TryGetProperty("display_name", out var dn) && dn.ValueKind == JsonValueKind.String
+                    ? dn.GetString() ?? "" : "";
+                var firstSeg = display.Split(',')[0].Trim();
+
+                var name2 = !string.IsNullOrWhiteSpace(municipality) ? municipality
+                          : !string.IsNullOrWhiteSpace(city) ? city
+                          : !string.IsNullOrWhiteSpace(county) ? county
+                          : !string.IsNullOrWhiteSpace(town) ? town
+                          : firstSeg;
+
+                // 省份：state（省/自治区）优先，没有再退回 city
+                var state = Addr("state");
+                var admin2 = !string.IsNullOrWhiteSpace(county) && county != name2 ? county : "";
+
+                list.Add(new WeatherGeoResult
+                {
+                    Name = name2,
+                    Lat = lat,
+                    Lon = lon,
+                    State = state,
+                    Admin2 = admin2,
+                    Country = Addr("country"),
+                    CountryCode = Addr("country_code").ToUpperInvariant(),
+                    Key = e.TryGetProperty("place_id", out var pid) && pid.ValueKind == JsonValueKind.Number
+                        ? pid.GetInt64().ToString() : "",
+                    // Nominatim 不给人口/地物代码，用 0/空；顺序本身就是相关性排序
+                    Population = 0,
+                    FeatureCode = "",
+                });
+            }
+
+            if (list.Count == 0) return list;
+
+            // 去重（同名同坐标只留一条）
+            var deduped = new List<WeatherGeoResult>();
+            foreach (var item in list)
+            {
+                if (deduped.Exists(d => Math.Abs(d.Lat - item.Lat) < 0.01 && Math.Abs(d.Lon - item.Lon) < 0.01))
+                    continue;
+                deduped.Add(item);
+            }
+            return deduped;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WeatherService] Nominatim({name}): {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            _nominatimLock.Release();
         }
     }
 
@@ -315,6 +432,12 @@ public class WeatherService : IWeatherService, IDisposable
         }
 
         // daily：最多 5 天 + 日出日落
+        // 注意：timeformat=unixtime 时 daily.time 是**时间戳**（当天 00:00 的当地时刻）。
+        // 直接用 DateTimeOffset.FromUnixTimeSeconds 会按 UTC 解释，导致整列日期早一天
+        // （例如今天周五却把明天的周六显示成"周五"）。必须先加上响应里的 utc_offset_seconds。
+        var tzOffset = root.TryGetProperty("utc_offset_seconds", out var tzEl) && tzEl.ValueKind == JsonValueKind.Number
+            ? tzEl.GetInt32() : 0;
+
         if (root.TryGetProperty("daily", out var da) && da.TryGetProperty("time", out var dt))
         {
             var n = Math.Min(5, dt.GetArrayLength());
@@ -323,7 +446,8 @@ public class WeatherService : IWeatherService, IDisposable
                 var tEl = dt[i];
                 var dateStr = tEl.ValueKind == JsonValueKind.String
                     ? tEl.GetString() ?? ""
-                    : DateTimeOffset.FromUnixTimeSeconds(tEl.GetInt64()).ToString("yyyy-MM-dd");
+                    : DateTimeOffset.FromUnixTimeSeconds(tEl.GetInt64() + tzOffset)
+                        .UtcDateTime.ToString("yyyy-MM-dd");
                 daily.Add(new DailyWeather
                 {
                     Date = dateStr,
@@ -344,7 +468,7 @@ public class WeatherService : IWeatherService, IDisposable
                     Visibility = st.Visibility, Clouds = st.Clouds,
                     Hourly = hourly, Daily = daily,
                     Sunrise = sunrise, Sunset = sunset,
-                    TzOffset = root.TryGetProperty("utc_offset_seconds", out var tz) ? tz.GetInt32() : 0,
+                    TzOffset = tzOffset,
                 };
             }
         }
