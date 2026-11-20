@@ -229,6 +229,19 @@ WASAPI 回环   →   能量阈值 + 静音    →   Whisper.net      →   Deep
 ```
 延迟参考：tiny ≈ 2s / base ≈ 4s（从句子说完到字幕出现，主要花在 Whisper 推理上）。
 
+### 12. 模型管理页
+
+导航栏「模型」页集中管理离线语音模型（`data/models`）：
+
+| 功能 | 说明 |
+| --- | --- |
+| 模型卡片 | `tiny 75MB` / `base 142MB` / `small 466MB`，显示体积、是否已下载、**使用中**徽标 |
+| 下载 / 校验 | 未下载时点「下载」带进度条；已下载时点「校验」只做完整性检查（存在 + 大小） |
+| 设为默认 | 写入 `live.asr.model`；设为默认后立即生效于下次聆听 |
+| 删除 | **两步确认**（首次点击变「确认删除」），字幕运行中会禁用删除并提示先停止聆听 |
+| 目录 | 顶部显示 `…\data\models`，可一键打开目录 |
+| 自动选择 | 底部说明当前实际模型：`自动` 在 ≥8 核用 base、否则 tiny |
+
 ## 操作
 
 | 操作 | 效果 |
@@ -332,7 +345,7 @@ WislandCSharp/
 │  ├─ PluginApi.cs           契约：IWislandPlugin / IPluginContext / 权限常量
 │  ├─ PluginHostContext.cs   单插件上下文（配置、日志、权限守门、托管定时器）
 │  └─ PluginLoader.cs        隔离加载、版本校验、异常隔离、卸载
-├─ Pages/                    主页 / 消息 / 天气 / 翻译 / 剪贴板 / 控制 / 设置
+├─ Pages/                    主页 / 消息 / 天气 / 翻译 / 剪贴板 / 控制 / 模型 / 设置
 ├─ Services/
 │  ├─ MessageInbox.cs        插件消息收件箱（Push / 已读 / 置顶）
 │  ├─ AppLauncher.cs         点磁贴打开程序的多级兜底

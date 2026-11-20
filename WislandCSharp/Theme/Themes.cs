@@ -50,6 +50,8 @@ public static class Glyph
     public const string Up = "\uE74A";
     public const string Down = "\uE74B";
     public const string Add = "\uE710";
+    /// <summary>模型管理页图标（下载/包裹类）。</summary>
+    public const string Model = "\uE8F4";
     public const string Pointer = "\uE8B0";
     public const string Eye = "\uE890";
     public const string EyeOff = "\uED1A";
