@@ -31,6 +31,7 @@ public class LiveService : ILiveService, IDisposable
 
     private AudioCapture? _capture;
     private AudioEnhancer? _enhancer;
+    private readonly object _enhancerLock = new();
     private AsrService? _asr;
     private CancellationTokenSource? _cts;
     private Task? _vadLoop;
@@ -275,19 +276,47 @@ public class LiveService : ILiveService, IDisposable
             _capture = null;
         }
 
-        if (_vadLoop != null && await Task.WhenAny(_vadLoop, Task.Delay(1500)) != _vadLoop)
+        // 等 VAD 线程退出：它可能正在 HandleSegmentAsync 里跑 ASR，
+        // 这时释放 WhisperFactory / sherpa recognizer 属于原生 use-after-free，会直接崩进程。
+        if (_vadLoop != null)
         {
-            // VAD 未及时退出：不阻塞关闭
+            if (await Task.WhenAny(_vadLoop, Task.Delay(8000)) != _vadLoop)
+                Debug.WriteLine("[LiveService] 警告：VAD 线程 8s 内未退出");
+            _vadLoop = null;
         }
-        _vadLoop = null;
 
         _cts?.Dispose();
         _cts = null;
 
-        try { _enhancer?.Dispose(); } catch { }
-        _enhancer = null;
-        try { _asr?.Dispose(); } catch { }
-        _asr = null;
+        // 增强器：与音频回调互斥，避免音频线程还在 Process 时释放原生模型
+        lock (_enhancerLock)
+        {
+            try { _enhancer?.Dispose(); } catch { }
+            _enhancer = null;
+        }
+
+        // ASR：拿住识别闸门 = 保证没有进行中的转写；拿不到就跳过释放（宁可泄漏一次也别崩）
+        if (_asr != null)
+        {
+            var gotGate = await _asrGate.WaitAsync(TimeSpan.FromSeconds(8));
+            try
+            {
+                if (gotGate)
+                {
+                    try { _asr.Dispose(); } catch { }
+                    _asr = null;
+                }
+                else
+                {
+                    Debug.WriteLine("[LiveService] 警告：识别仍在进行，跳过释放（等待 GC 回收）");
+                    _asr = null;
+                }
+            }
+            finally
+            {
+                if (gotGate) _asrGate.Release();
+            }
+        }
 
         RunningChanged?.Invoke(this, false);
     }
@@ -316,12 +345,16 @@ public class LiveService : ILiveService, IDisposable
         if (samples.Length == 0) return;
 
         // 人声处理（流式，内部按帧缓存；可能返回空数组，表示还在攒帧）
-        if (_enhancer != null && _enhancer.Active)
+        // 与 StopAsync 的 Dispose 共用一把锁：避免音频线程用到已释放的原生模型（会直接 fast-fail 崩进程）
+        lock (_enhancerLock)
         {
-            try { samples = _enhancer.Process(samples); }
-            catch (Exception ex) { Debug.WriteLine("[LiveService] enhancer: " + ex.Message); }
-            if (samples.Length == 0) return;
+            if (_enhancer != null && _enhancer.Active)
+            {
+                try { samples = _enhancer.Process(samples); }
+                catch (Exception ex) { Debug.WriteLine("[LiveService] enhancer: " + ex.Message); }
+            }
         }
+        if (samples.Length == 0) return;
 
         lock (_buffer) _buffer.AddRange(samples);
     }
@@ -450,37 +483,56 @@ public class LiveService : ILiveService, IDisposable
 
     private async Task HandleSegmentAsync(float[] samples, CancellationToken ct)
     {
-        if (_asr == null) return;
+        var asr = _asr;
+        if (asr == null) return;
         var sid = (++_segmentId).ToString();
 
         // 同一时刻只跑一次识别，避免 CPU 打满
         if (!await _asrGate.WaitAsync(0, ct)) return;
+
+        string text;
         try
         {
             var language = Cfg("live.asr.language", "auto");
-            var text = await _asr.TranscribeAsync(samples, language, ct);
-            text = Clean(text);
+            text = Clean(await asr.TranscribeAsync(samples, language, ct));
             App.DebugNote($"[ASR] {samples.Length * 1000 / SampleRate}ms → \"{text}\"");
-            if (text.Length == 0) { Partial?.Invoke(this, ""); return; }
-
-            Segment?.Invoke(this, (sid, text));
-            Partial?.Invoke(this, "");
-
-            var zh = await TranslateAsync(text, ct);
-            if (zh.Length > 0)
-            {
-                LiveZh?.Invoke(this, (sid, zh));
-                FinalZh?.Invoke(this, (sid, zh));
-            }
         }
         catch (Exception ex)
         {
             Debug.WriteLine("[LiveService] ASR: " + ex.Message);
             Error?.Invoke(this, "识别失败：" + ex.Message);
+            return;
         }
         finally
         {
+            // 识别一结束就释放闸门：翻译走网络（最长 60s），不能让它挡住后续切句/识别
             _asrGate.Release();
+        }
+
+        if (text.Length == 0) { Partial?.Invoke(this, ""); return; }
+
+        Segment?.Invoke(this, (sid, text));
+        Partial?.Invoke(this, "");
+
+        // 翻译异步执行，不阻塞 VAD 循环（否则网络慢时音频缓冲会一直涨）
+        _ = TranslateSegmentAsync(sid, text, ct);
+    }
+
+    /// <summary>字幕翻译（独立任务）：失败只记日志，不影响识别链路。</summary>
+    private async Task TranslateSegmentAsync(string sid, string text, CancellationToken ct)
+    {
+        try
+        {
+            var zh = await TranslateAsync(text, ct);
+            if (zh.Length == 0) return;
+
+            LiveZh?.Invoke(this, (sid, zh));
+            FinalZh?.Invoke(this, (sid, zh));
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Debug.WriteLine("[LiveService] 翻译: " + ex.Message);
         }
     }
 

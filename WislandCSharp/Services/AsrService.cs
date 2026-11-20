@@ -21,6 +21,7 @@ public sealed class AsrService : IDisposable
     private readonly AsrModelStore _store;
     private WhisperAsr? _whisper;
     private SenseVoiceAsr? _senseVoice;
+    private volatile bool _disposed;
 
     public AsrService(IConfigService cfg, AsrModelStore store)
     {
@@ -158,6 +159,7 @@ public sealed class AsrService : IDisposable
 
     public async Task<string> TranscribeAsync(float[] samples, string language, CancellationToken ct)
     {
+        if (_disposed) return "";
         if (_senseVoice != null)
         {
             // SenseVoice 是同步 CPU 推理（通常几十毫秒到几百毫秒），放到线程池避免阻塞 VAD 循环
@@ -170,6 +172,7 @@ public sealed class AsrService : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         try { _senseVoice?.Dispose(); } catch { }
         try { _whisper?.Dispose(); } catch { }
         _senseVoice = null;

@@ -307,6 +307,7 @@ public sealed class WhisperAsr : IDisposable
     /// <summary>识别一段 16k 单声道采样，language 为 whisper 语言码（auto/ja/en/zh）。</summary>
     public async Task<string> TranscribeAsync(float[] samples, string language, CancellationToken ct = default)
     {
+        if (_disposed) return "";
         if (samples.Length < TargetRate / 4) return "";   // 少于 250ms 不值得识别
 
         samples = NormalizeForWhisper(samples);
@@ -344,6 +345,7 @@ public sealed class WhisperAsr : IDisposable
     /// <summary>确保模型已加载；返回工厂实例。</summary>
     private WhisperFactory? EnsureFactory(string? modelName)
     {
+        if (_disposed) return null;
         var model = modelName ?? _currentModel;
         if (string.IsNullOrWhiteSpace(model)) return null;
 
@@ -377,6 +379,8 @@ public sealed class WhisperAsr : IDisposable
     private int _threadsOverride;
 
     private static bool _useGpu = true;
+
+    private volatile bool _disposed;
 
     /// <summary>
     ///     // 选择 whisper.cpp 运行库后端：
@@ -493,10 +497,12 @@ public sealed class WhisperAsr : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         lock (_lock)
         {
             try { _factory?.Dispose(); } catch { }
             _factory = null;
+            _loadedModel = "";
         }
     }
 }
