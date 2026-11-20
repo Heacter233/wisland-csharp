@@ -759,13 +759,15 @@ public sealed class Ff14TreasurePlugin : IWislandPlugin
 
         // 格式对齐原 overlay.html：系统金 ÷10000 显示「万」，收支/盈亏保留两位小数
         _statPanel.Children.Add(StatCard("地图", s.Maps.ToString("N0"), null));
-        _statPanel.Children.Add(StatCard("封印", s.MagicSeals.ToString("N0"), null));
+        _statPanel.Children.Add(StatCard("魔纹", s.MagicSeals.ToString("N0"), null));
         _statPanel.Children.Add(StatCard("系统金", (s.SystemGold / 10000.0).ToString("0.0000") + "万", null));
-        _statPanel.Children.Add(StatCard("收入", s.TotalIncome.ToString("N2"), "AppUp"));
-        _statPanel.Children.Add(StatCard("成本", s.TotalCost.ToString("N2"), "AppDown"));
+        // 财富悬浮窗的惯例是「绿赚红亏」（与国际行情一致）；
+        // 而 AppUp = 红、AppDown = 绿（股票习惯），所以这里刻意反着用。
+        _statPanel.Children.Add(StatCard("收入", s.TotalIncome.ToString("N2"), "AppDown"));
+        _statPanel.Children.Add(StatCard("成本", s.TotalCost.ToString("N2"), "AppUp"));
         _statPanel.Children.Add(StatCard("盈亏",
             (s.Profit >= 0 ? "+" : "") + s.Profit.ToString("N2"),
-            s.Profit >= 0 ? "AppUp" : "AppDown"));
+            s.Profit >= 0 ? "AppDown" : "AppUp"));
     }
 
     private FrameworkElement StatCard(string label, string value, string? colorKey)

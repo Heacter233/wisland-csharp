@@ -17,9 +17,9 @@
     <AssemblyTitle>Wisland 灵动岛</AssemblyTitle>
     <Description>Windows 液态灵动岛：毛玻璃、媒体/天气/消息聚合、插件系统</Description>
     <Copyright>© Heacter</Copyright>
-    <AssemblyVersion>0.2.0.0</AssemblyVersion>
-    <FileVersion>0.2.0.0</FileVersion>
-    <Version>0.2.0</Version>
+    <AssemblyVersion>0.2.1.0</AssemblyVersion>
+    <FileVersion>0.2.1.0</FileVersion>
+    <Version>0.2.1</Version>
     <!-- 本机仅安装 .NET 10 运行时：允许 net8.0 应用滚动到更高版本运行 -->
     <RollForward>Major</RollForward>
   </PropertyGroup>
@@ -37,9 +37,6 @@
 
   <ItemGroup>
     <Resource Include="Resources\1002.ico" />
-    <Content Include="Resources\1002.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
     <!-- 内置消息提示音：默认用它，用户可在设置里换成自己的 wav -->
     <Content Include="Resources\sound.wav">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -50,4 +47,15 @@
     <PackageReference Include="org.k2fsa.sherpa.onnx" Version="2.0.2" />
     <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="2.0.2" />
   </ItemGroup>
+
+  <!-- 发布裁剪：只保留 Windows x64 原生库（Whisper Vulkan 包默认会把 linux/osx/arm 也复制进来，单文件会白胖 56MB+） -->
+  <Target Name="TrimNativeForWindowsX64" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+        Condition="$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').StartsWith('runtimes/'))
+                   And !$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').StartsWith('runtimes/win-x64/'))
+                   And !$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').StartsWith('runtimes/vulkan/win-x64/'))
+                   And !$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').StartsWith('runtimes/win/lib/'))" />
+    </ItemGroup>
+  </Target>
 </Project>

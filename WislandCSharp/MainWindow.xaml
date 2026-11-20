@@ -10,6 +10,6 @@
         ShowInTaskbar="False"
         Topmost="True"
         UseLayoutRounding="True"
-        Icon="/Resources/1002.ico">
+        Icon="pack://application:,,,/Resources/1002.ico">
     <Grid x:Name="RootGrid"/>
 </Window>

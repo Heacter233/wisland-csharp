@@ -7,23 +7,25 @@
 <img src="docs/expanded.png" width="420">
 </p>
 
-> **当前版本 v0.2.0**（Releases 里的安装包）；主线已推进到 **v0.2.1-dev**，新改动见[更新进展](#更新进展)。
+> **当前版本 v0.2.1**（[Releases](https://github.com/Heacter233/wisland-csharp/releases/tag/v0.2.1) 安装包）。
 > 作者 **Heacter**；程序属性中的公司/作者信息见 exe 属性页。
 >
-> v0.2.0 之后主要做了三件事：**实时字幕**（纯 C# 离线 ASR，§12）、**语音模型管理**（取消 + 断点续传，§13）、
-> 以及**天气与歌词的多源兜底**（§10 / §11）。
+> 本版重点：**实时字幕**（纯 C# 离线识别 + 人声处理 + 多引擎翻译）、**翻译多引擎与自动回退**、
+> **Vulkan GPU 加速**、**语音模型按需下载与管理**，以及长时间运行的稳定性修复。完整说明见[当前版本](#当前版本v021)。
 
 ## 下载
 
-到 [Releases](https://github.com/Heacter233/wisland-csharp/releases) 下载 v0.2.0，按「运行库」和「插件版本」两个维度选一个包
-（v0.2.1-dev 的实时字幕等功能还没打包，想先试可以直接用[构建](#构建)方式编译 `main`）：
+到 [Releases](https://github.com/Heacter233/wisland-csharp/releases/tag/v0.2.1) 下载 v0.2.1，按「运行库」和「插件版本」两个维度选一个包：
 
 | 包 | 大小 | 运行库 | 附带插件 |
 | --- | --- | --- | --- |
-| `wisland-csharp-0.2.0-slim-x64.zip` | ~7.8 MB | 需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0) | 普通版：股票、Clash 控制 |
-| `wisland-csharp-0.2.0-portable-x64.zip` | ~70 MB | **自带 .NET 8 运行库，解压即用** | 普通版：股票、Clash 控制 |
-| `wisland-csharp-0.2.0-ff14-slim-x64.zip` | ~8.0 MB | 需要 .NET 8 桌面运行时 | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
-| `wisland-csharp-0.2.0-ff14-portable-x64.zip` | ~70.6 MB | **自带 .NET 8 运行库，解压即用** | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
+| `wisland-csharp-0.2.1-slim-x64.zip` | ~34.7 MB | 需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0) | 普通版：股票、Clash 控制 |
+| `wisland-csharp-0.2.1-portable-x64.zip` | ~97.3 MB | **自带 .NET 8 运行库，解压即用** | 普通版：股票、Clash 控制 |
+| `wisland-csharp-0.2.1-ff14-slim-x64.zip` | ~34.9 MB | 需要 .NET 8 桌面运行时 | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
+| `wisland-csharp-0.2.1-ff14-portable-x64.zip` | ~97.5 MB | **自带 .NET 8 运行库，解压即用** | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
+
+> 包体比 v0.2.0 大（slim 约 7.8 MB → 34.7 MB），因为内置了 Whisper 的 **Vulkan GPU 运行时**（约 55 MB）
+> 与 sherpa-onnx 的 ONNX 运行时；没有可用 GPU 时会自动回退 CPU，不影响功能。
 
 双击 `Wisland.exe` 即可。首次运行会在 exe 同目录生成 `config.json` 与 `data\`；
 自带插件在 `plugins\<id>\`，可以在设置页「插件设置」里查看/重载，不需要时直接删掉对应目录。
@@ -34,54 +36,80 @@
 > 处理方式：SmartScreen 提示时点「更多信息 → 仍要运行」；从浏览器下载的解压后右键 `Wisland.exe` → 属性 →
 > 勾选「解除锁定(Unblock)」→ 确定。
 
-## 更新进展
+## 当前版本：v0.2.1
 
-### v0.2.1-dev（v0.2.0 之后的主线，尚未打包发布）
+> 发布日期：2026-11-20 · 对应 tag `v0.2.1` · 相对 v0.2.0 的变化见 [Releases 说明](https://github.com/Heacter233/wisland-csharp/releases/tag/v0.2.1)
 
-| 方向 | 改动 |
+这一版把「实时字幕 / 语音识别 / 人声处理 / 翻译」做成了完整能力，并补上 GPU 加速、模型管理和一批长跑稳定性修复。
+更早版本（v0.2.0 及以前）的变化请直接看 Releases 页面，这里只描述**当前版本能做什么**。
+
+### 实时字幕（翻译页 →「实时字幕」）
+
+整条链路都在 C# 进程内完成，不依赖 Python：
+
+```
+WASAPI 回环/麦克风 → 人声处理（DPDFNet2 / GTCRN / VoxLock）→ 电平归一化 → VAD 切句 → 离线 ASR（SenseVoice / Whisper）→ 多引擎翻译
+```
+
+| 能力 | 说明 |
 | --- | --- |
-| **实时字幕** | 从占位实现变为**纯 C# 进程内管线**：WASAPI 回环 / 麦克风 → AGC/归一化 → VAD 切句 → **SenseVoice / Whisper 离线识别** → 多引擎翻译；翻译页新增分段、收起态字幕胶囊、实时音量条、一键清空。SenseVoice 在 CPU 上约 0.2~0.5s/句，Whisper tiny ≈ 2s / base ≈ 4s（4 核） |
-| **语音模型管理** | 新增 tiny / base / small 三档模型卡片：下载、校验、设为默认、删除（两步确认）、清除缓存；**取消下载** 与 **HTTP Range 断点续传**；下载状态放在 `ModelManager` 服务层，切分段 / 切页面 / 重开窗口都不丢进度 |
-| **界面统一** | 模型管理不再占一个导航页，改为**翻译页「模型」分段**（文本 / 实时字幕 / 单词本 / 模型），与字幕设置放在同一处；`--page:model` 调试参数仍可直达 |
-| **天气** | 修 5 天预报星期错位一天（UTC 偏移导致日期漂移）；中文区县 / 县级市在 Open-Meteo 搜不到时改用 Nominatim 兜底 |
-| **歌词** | 新增 **LiriQo**（11 源聚合）与 **LRCLIB**：网易云查不到时不再直接“无歌词”；都没有时间轴时按播放进度比例滚动纯文本 |
-| **稳定性** | 毛玻璃残影、滚动残影、切换分段后旧内容残留等收尾修复（详见提交记录） |
+| 音频源 | 系统音频回环（看视频/游戏）或麦克风，设置页切换 |
+| 人声处理 | 默认 **DPDFNet2 降噪**（去 BGM/噪声、保留所有人声）；可选 GTCRN（轻量）/ VoxLock（目标说话人提取，仅单人场景） |
+| VAD 切句 | 自适应噪声底阈值；静音阈值与最长句时长都可在设置页用滑条调整（默认 450ms / 12s） |
+| 识别引擎 | `auto` 按语言选择：中文/英文/韩语/粤语 → **SenseVoice-Small**（CPU 约 0.2~0.5s/句）；日语/自动 → **Whisper** |
+| Whisper 模型 | `tiny` / `base` / `small` / `turbo`（多语，需 GPU 体验更佳）/ `anime`（日语动画特化，**暂不推荐**） |
+| GPU 加速 | Whisper 支持 **Vulkan**（AMD/Intel/NVIDIA，实测约 7 倍加速）与 **CUDA**（需自备运行库，缺库自动回退）；失败自动回退 CPU |
+| 翻译 | 与文本翻译共用多引擎链（见下节），可整体关闭只显示原文 |
+| 收起态显示 | 收起后在岛的下方显示**最近两段字幕**（上一条半透明 + 当前一条高亮，每段原文在上/译文在下），默认常驻到停止聆听（`live.collapsed_hold_s` 可设停留秒数） |
+| 延迟参考 | SenseVoice ≈ 0.2~0.5s/句；Whisper turbo + Vulkan ≈ 0.2s/句；纯 CPU Whisper base ≈ 1.3~1.6s/句 |
 
-最近提交（`main`）：
+### 翻译引擎（文本翻译 + 实时字幕共用）
 
-```
-8e44c13  fix(models): 删除/清除缓存后重置卡片提示，避免残留「已取消（已缓存 …）」
-00a6487  fix(models): 模型下载支持取消与断点续传，模型管理移入翻译页子分段
-4878e0f  feat(live): 新增模型管理页（下载 / 校验 / 设为默认 / 删除）
-a67256d  feat(live): 实时字幕实装为纯 C# 离线管线（音频捕获 + VAD + Whisper + 翻译）
-8e7f203  fix(weather+lyrics): 修复日预报日期错位一天；区县地名兜底；歌词加 LiriQo / LRCLIB 多源
-```
+| 引擎 | Key | 说明 |
+| --- | --- | --- |
+| Index-Translate（默认） | 不需要 | B站官方免费 API，35B-A3B，OpenAI 兼容、流式 |
+| 智谱 GLM-4-Flash | 需要（免费模型） | OpenAI 兼容；手机号注册即可，设置页有开通引导 |
+| DeepSeek | 需要 | 保留原有长提示词 |
+| Google / Bing | 不需要 | 免密钥网页接口（非官方，可能限流/失效，已做失败回退） |
 
-> 这些改动都在 `main`，`dotnet build` 即可体验；`Wisland.exe` 里的版本号与 Releases 安装包仍是 v0.2.0，
-> 等下一轮打包时统一升到 v0.2.1。
+- 配置：`translate.engine` 选主引擎，`translate.fallback` 填回退顺序（默认 `google`）；没配 Key 的引擎自动跳过
+- GLM 偶尔会输出「名词解释/例句」：提示词已收紧，且检测到解释性内容会自动换下一个引擎
+- 流式输出；设置页有「测试翻译」按钮（显示耗时与译文）
 
-- **翻译多引擎**：新增 Index-Translate（B站免费 API）/ 智谱 GLM-4-Flash / Google / Bing，主引擎失败自动回退；手动翻译与实时字幕共用引擎链（设置页可切换与测试）。
-- **anime-whisper 标记暂不推荐**：实测幻听严重、偶尔把日语识别成英文（句首 S 清理仍保留），模型页与设置里已标注。
-- **GLM 翻译解释性输出治理**：GLM-4-Flash 偶尔会回「名词解释/词性/例句」。
-  提示词已收紧（严禁解释），并加输出清洗（去「译文：」前缀、遇解释标记截断）；检测到解释性内容时自动走回退链换引擎。
-- **收起态字幕卡片**：实时字幕在收起态显示**最近两段**（上一条 + 当前，每条原文在上、译文在下），
-  宽度 640→760、高度 2~4 行（102），上一条半透明；不再 7 秒后消失，`live.collapsed_hold_s` 控制停留（0 = 一直显示到停止聆听）。
-- **启停复用模型**：停止后再开始聆听不再销毁/重建 Whisper Vulkan 设备（实测 6.3s → 0.35s 秒开），
-  缓解 AMD 驱动长时间运行后反复创建/销毁设备导致的报错卡死。
-- **anime-whisper 句首 S 修复**：该模型训练语料带说话人/台本标记，句首常多出一个 `S`（如「S魔物である…」）。
-  现在仅对 anime 模型、且 `S` 后紧跟日文/引号时自动去掉（保留 `S級` / `Sランク` / `SS` 等合法词），设置页可关（`live.asr.anime_strip_s`）。
-- **实时字幕音频修复**：回环捕获电平本来就低（实测约 1/3），原先没有增益、VAD 又是固定阈值 0.012，导致「只有很大声才识别」。
-  现在加入 AGC 自动增益（目标约 -20dBFS）+ 峰值归一化 + 自适应噪声底阈值，并修复切句索引在裁剪缓冲后错位（导致每句只剩 40ms）的问题。
-- **人声处理链路**：原始音频 → **DPDFNet2 降噪 / GTCRN / VoxLock 目标说话人提取** → 电平归一化 → VAD → ASR；
-  AGC/高通默认关闭；VAD 切句上限 6s→12s；人声处理模型按需下载（DPDFNet 10MB / GTCRN 0.5MB / VoxLock 74MB）。
-- **ASR 多引擎**：新增 **SenseVoice-Small**（sherpa-onnx / ONNX，CPU 极快，中/日/英/韩/粤）与 Whisper 家族新模型
-  **large-v3-turbo**（q5 547MB）/ **anime-whisper**（1.4GB，日语动画特化）；Whisper 支持 **Vulkan / CUDA** GPU 加速开关；
-  模型页按引擎家族分组，标注体积 / 语言 / 推荐硬件。
+### 语音模型（翻译页 →「模型」，按家族分组）
 
-### v0.2.0（已发布）
+| 家族 | 模型 | 体积 | 说明 |
+| --- | --- | --- | --- |
+| SenseVoice | `sensevoice` | 226 MB | CPU 极快，中文/英文/韩语/粤语强；**日语实测较弱**，日语请用 Whisper |
+| Whisper | `tiny` / `base` / `small` | 75 / 142 / 466 MB | 通用多语；日语推荐 `small` 或 `turbo` |
+| Whisper | `turbo` | 547 MB | large-v3-turbo 量化版，多语质量好，建议 GPU |
+| Whisper | `anime` | 1.4 GB | 日语动画特化；**实测幻听严重、偶把日语识别成英文，暂不推荐** |
+| 人声处理 | `dpdfnet2` / `gtcrn` / `voxlock` | 10 / 0.5 / 74 MB | 降噪 / 轻量降噪 / 目标说话人提取（单人） |
 
-插件系统成熟（清单校验 / 隔离加载 / 权限守门 / 插件页 / 热重载）、消息提示音、5 个示例插件随包可选，
-外加 FF14 三件套（招募监控 / 物品价格 / 挖宝悬浮窗）。
+- 全部支持：**按需下载、HTTP Range 断点续传、取消、校验、设为默认、删除**
+- 模型下载状态放在服务层，切分段/切页面/重开窗口不丢进度；首次开始聆听会自动下载当前引擎所需模型
+- 已加载的模型在停止聆听后**保留复用**（再次开始约 0.3s，不再反复创建/销毁 GPU 设备）
+
+### 系统要求
+
+- Windows 10 19041+ / Windows 11，x64
+- slim 包需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)；portable 包自带
+- 实时字幕：GPU 可选（Vulkan/CUDA 不可用时自动 CPU）；模型占用约 0.2~2 GB 磁盘（按下载的模型）
+- 首次运行会下载 WebView 无关的字体（使用系统字体）；会联网获取天气/歌词/翻译
+
+### 已知限制
+
+- **anime-whisper 暂不推荐**：幻听多、偶尔把日语识别成英文；可关闭「清理句首 S」仍不解决质量问题
+- **VoxLock 只保留一个说话人**：多人对话会丢其他角色台词，仅适合单人解说/直播/通话
+- **SenseVoice 日语弱**：日语场景请选 Whisper（small/turbo）
+- 免密钥翻译（Google/Bing）是非官方接口，可能随页面改版失效
+- 未购买代码签名证书：可能提示「未知发布者」或被 SmartScreen 拦截（处理方式见下载说明）
+- 部分 AMD 显卡驱动在长时间 Vulkan 场景下可能报错；可把 `live.asr.gpu` 设为 `off` 或改用 `small` 模型
+
+### 更早版本
+
+- **v0.2.0**：插件系统成熟（清单校验 / 隔离加载 / 权限守门 / 插件页 / 热重载）、消息提示音、5 个示例插件随包可选，外加 FF14 三件套
+- **v0.1.x**：首个可用版本（基础岛、媒体、天气、剪贴板、翻译页）
 
 ## 插件开发
 
