@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
@@ -28,6 +29,8 @@ public partial class ModelsPage : UserControl
     /// <summary>单张卡片的可变更控件引用（避免每次进度刷新都重建视觉树）。</summary>
     private sealed class CardUi
     {
+        public TextBlock Hint = null!;
+
         public string Name = "";
         public Border Root = null!;
         public Border BadgeHost = null!;
@@ -127,11 +130,23 @@ public partial class ModelsPage : UserControl
 
         CardStack.Children.Clear();
         _cards.Clear();
-        foreach (var (name, sizeMb, note) in WhisperAsr.Models)
+        foreach (var family in new[] { AsrModels.FamilySenseVoice, AsrModels.FamilyWhisper })
         {
-            var card = BuildCard(name, sizeMb, note);
-            _cards[name] = card;
-            CardStack.Children.Add(card.Root);
+            var header = new TextBlock
+            {
+                Text = AsrModels.FamilyName(family),
+                FontSize = 11,
+                Margin = new Thickness(2, 10, 0, 6),
+            };
+            header.SetResourceReference(TextBlock.ForegroundProperty, "AppText3");
+            CardStack.Children.Add(header);
+
+            foreach (var info in AsrModels.Family(family))
+            {
+                var card = BuildCard(info);
+                _cards[info.Key] = card;
+                CardStack.Children.Add(card.Root);
+            }
         }
         foreach (var card in _cards.Values) Apply(card);
 
@@ -139,15 +154,36 @@ public partial class ModelsPage : UserControl
         Host.Refresh();
     }
 
+    /// <summary>当前实际会被使用的模型 key（按引擎配置 + 已下载模型推算）。</summary>
+    private string CurrentModelKey()
+    {
+        try
+        {
+            var cfg = ServiceHub.Config;
+            var store = new AsrModelStore(ModelsDirStatic(cfg));
+            return AsrService.ResolveModelKey(cfg, store);
+        }
+        catch { return WhisperAsr.ResolveModel(_model); }
+    }
+
+    private static string ModelsDirStatic(IConfigService cfg)
+    {
+        var dir = cfg.Get("live.models_dir", "models");
+        if (string.IsNullOrWhiteSpace(dir)) dir = "models";
+        return Path.IsPathRooted(dir) ? dir : Path.Combine(cfg.DataDir, dir);
+    }
+
     private void UpdateHint()
     {
-        var resolved = WhisperAsr.ResolveModel(_model);
+        var resolved = CurrentModelKey();
+        var info = AsrModels.Find(resolved);
+        var engine = (ServiceHub.Config.Get("live.asr.engine", "auto") ?? "auto");
         var parts = new List<string>
         {
-            $"当前使用：{resolved}" +
+            $"当前使用：{(info?.DisplayName ?? resolved)}" +
             (string.Equals(_model, "auto", StringComparison.OrdinalIgnoreCase)
-                ? $"（自动 · {Environment.ProcessorCount} 核）"
-                : "（手动指定）"),
+                ? $"（引擎 {engine} · 自动按 {Environment.ProcessorCount} 核选模型）"
+                : $"（引擎 {engine}）"),
         };
 
         if (ServiceHub.Models?.AnyDownloading == true) parts.Add("下载中可从卡片取消，已下部分保留");
@@ -156,9 +192,12 @@ public partial class ModelsPage : UserControl
         HintText.Text = string.Join(" · ", parts);
     }
 
-    private CardUi BuildCard(string name, int sizeMb, string note)
+    private CardUi BuildCard(AsrModelInfo info)
     {
-        var card = new CardUi { Name = name };
+        var card = new CardUi { Name = info.Key };
+        var name = info.DisplayName;
+        var sizeMb = info.SizeMb;
+        var note = $"{info.Note}｜语言：{info.Languages}｜{info.HardwareHint}";
 
         var root = new Border
         {
@@ -206,6 +245,16 @@ public partial class ModelsPage : UserControl
         titleRow.Children.Add(card.BadgeHost);
         left.Children.Add(titleRow);
 
+        card.Hint = new TextBlock
+        {
+            Text = $"{info.Note}｜{info.Languages}｜{info.HardwareHint}",
+            Style = (Style)FindResource("T3"),
+            FontSize = 9.5,
+            Margin = new Thickness(0, 2, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+        };
+        left.Children.Add(card.Hint);
+
         card.Status = new TextBlock
         {
             Style = (Style)FindResource("T3"),
@@ -243,7 +292,16 @@ public partial class ModelsPage : UserControl
         card.SetDefault.Click += (_, _) =>
         {
             if (!ServiceHub.Models.Exists(card.Name)) return;
-            ServiceHub.Config.Set("live.asr.model", card.Name);
+            var info = AsrModels.Find(card.Name);
+            if (info != null && info.Family == AsrModels.FamilySenseVoice)
+            {
+                ServiceHub.Config.Set("live.asr.engine", "sensevoice");
+            }
+            else
+            {
+                ServiceHub.Config.Set("live.asr.engine", "whisper");
+                ServiceHub.Config.Set("live.asr.model", card.Name);
+            }
             Refresh();
         };
         actions.Children.Add(card.SetDefault);
@@ -271,7 +329,7 @@ public partial class ModelsPage : UserControl
         var st = mgr.StateOf(name);
         var exists = mgr.Exists(name);
         var partial = mgr.PartialBytes(name);
-        var resolved = WhisperAsr.ResolveModel(_model);
+        var resolved = CurrentModelKey();
         var isCurrent = string.Equals(name, resolved, StringComparison.OrdinalIgnoreCase);
         var confirming = _confirmDelete.Contains(name);
 
@@ -357,12 +415,7 @@ public partial class ModelsPage : UserControl
             : exists ? "删除本地模型文件" : "删除未下完的缓存";
     }
 
-    private static string NoteOf(string name)
-    {
-        foreach (var (n, _, note) in WhisperAsr.Models)
-            if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return note;
-        return "";
-    }
+    private static string NoteOf(string name) => AsrModels.Find(name)?.Note ?? "";
 
     // ---------------- 操作 ----------------
 

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -6,6 +8,7 @@ using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 using Whisper.net;
+using Whisper.net.LibraryLoader;
 
 namespace Wisland.Services;
 
@@ -349,8 +352,15 @@ public sealed class WhisperAsr : IDisposable
             try
             {
                 _factory?.Dispose();
-                _factory = WhisperFactory.FromPath(PathOf(model));
+                var options = new WhisperFactoryOptions
+                {
+                    UseGpu = _useGpu,
+                    GpuDevice = 0,
+                };
+                _factory = WhisperFactory.FromPath(PathOf(model), options);
                 _loadedModel = model;
+                try { App.DebugNote($"[Whisper] 已加载 {model}，运行库={WhisperFactory.GetRuntimeInfo()}"); }
+                catch { }
                 return _factory;
             }
             catch
@@ -364,6 +374,48 @@ public sealed class WhisperAsr : IDisposable
 
     private string _currentModel = "base";
     private int _threadsOverride;
+
+    private static bool _useGpu = true;
+
+    /// <summary>
+    ///     // 选择 whisper.cpp 运行库后端：
+    ///   auto   → Vulkan（AMD/Intel/NVIDIA 都支持）优先，失败自动回退 CPU
+    ///   vulkan → 强制 Vulkan 优先
+    ///   cuda   → CUDA12/CUDA 优先（需自备 CUDA 运行库；未安装时自动退 Vulkan/CPU）
+    ///   off    → 只用 CPU
+    /// 必须在创建 WhisperFactory 之前调用。
+    /// </summary>
+    public static void ConfigureRuntime(string mode)
+    {
+        var order = new List<RuntimeLibrary>();
+        switch ((mode ?? "auto").Trim().ToLowerInvariant())
+        {
+            case "off":
+            case "cpu":
+                order.Add(RuntimeLibrary.Cpu);
+                _useGpu = false;
+                break;
+            case "cuda":
+                order.Add(RuntimeLibrary.Cuda12);
+                order.Add(RuntimeLibrary.Cuda);
+                order.Add(RuntimeLibrary.Vulkan);
+                order.Add(RuntimeLibrary.Cpu);
+                _useGpu = true;
+                break;
+            case "vulkan":
+                order.Add(RuntimeLibrary.Vulkan);
+                order.Add(RuntimeLibrary.Cpu);
+                _useGpu = true;
+                break;
+            default: // auto
+                order.Add(RuntimeLibrary.Vulkan);
+                order.Add(RuntimeLibrary.Cpu);
+                _useGpu = true;
+                break;
+        }
+        RuntimeOptions.RuntimeLibraryOrder = order;
+        Debug.WriteLine($"[Whisper] 运行库顺序: {string.Join(",", order)}  UseGpu={_useGpu}");
+    }
 
     /// <summary>识别线程数（0 = 自动：核心数 - 1）。</summary>
     public void SetThreads(int threads) => _threadsOverride = Math.Max(0, threads);

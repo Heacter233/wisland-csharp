@@ -210,12 +210,27 @@ public partial class SettingsPage : UserControl
             new[] { "自动", "日语", "英语", "中文" },
             cfg.Get("live.asr.language", "auto")));
 
-        AddCard(liveSec, CardChoice("识别模型", "live.asr.model",
-            new[] { "auto", "tiny", "base", "small" },
-            new[] { "自动", "tiny 75MB", "base 142MB", "small 466MB" },
+        AddCard(liveSec, CardChoice("识别引擎", "live.asr.engine",
+            new[] { "auto", "sensevoice", "whisper" },
+            new[] { "自动（中文/英文→SenseVoice，日语→Whisper）", "SenseVoice（中文/英文快）", "Whisper（日语推荐）" },
+            cfg.Get("live.asr.engine", "auto")));
+
+        AddCard(liveSec, CardChoice("识别模型（Whisper）", "live.asr.model",
+            new[] { "auto", "tiny", "base", "small", "turbo", "anime" },
+            new[] { "自动", "tiny 75MB", "base 142MB", "small 466MB",
+                    "turbo 547MB（多语·需GPU）", "anime 1.4GB（仅日语·需GPU）" },
             cfg.Get("live.asr.model", "auto")));
 
-        AddCard(liveSec, BuildModelDownloadCard(cfg.Get("live.asr.model", "auto")));
+        AddCard(liveSec, CardChoice("GPU 加速（Whisper）", "live.asr.gpu",
+            new[] { "auto", "off", "vulkan", "cuda" },
+            new[] { "自动（Vulkan 优先）", "关闭（只用 CPU）", "Vulkan（AMD/Intel/NVIDIA）", "CUDA（需自备运行库）" },
+            cfg.Get("live.asr.gpu", "auto")));
+
+        AddCard(liveSec, CardText("识别线程数", "live.asr.threads",
+            cfg.Get("live.asr.threads", 0).ToString(),
+            "0 = 自动（核心数-1）；SenseVoice 与 Whisper 共用，重启字幕生效"));
+
+        AddCard(liveSec, BuildModelDownloadCard());
 
         AddCard(liveSec, CardToggle("字幕翻译", "live.translate.enabled",
             cfg.Get("live.translate.enabled", true),
@@ -778,20 +793,23 @@ public partial class SettingsPage : UserControl
     ///
     /// 首次点「开始聆听」也会自动下载；这个卡片用于提前下载或在网络恢复后重试。
     /// </summary>
-    private Border BuildModelDownloadCard(string model)
+    private Border BuildModelDownloadCard()
     {
         var card = BaseCard("语音模型", "", out var body);
 
-        // "auto" 要解析成实际模型名，否则会显示"未下载：auto"这种误导信息
-        var resolved = Services.WhisperAsr.ResolveModel(model);
         var dir = LiveModelsDir();
-        var asr = new Services.WhisperAsr(dir);
+        var store = new Services.AsrModelStore(dir);
+        // 按「引擎 + 模型」配置解析这次实际会用的模型（SenseVoice / Whisper）
+        var resolved = Services.AsrService.ResolveModelKey(ServiceHub.Config, store);
+        var info = Services.AsrModels.Find(resolved);
+        var display = info?.DisplayName ?? resolved;
+        var loaded = store.Exists(resolved);
+        var sizeNote = info == null ? "" : $" · {info.SizeMb} MB · {info.HardwareHint}";
         var status = new TextBlock
         {
-            Text = asr.Exists(resolved)
-                ? $"已下载：{resolved}" + (resolved != model ? $"（由「{model}」自动选择）" : "") + $"\n{dir}"
-                : $"未下载：{resolved}" + (resolved != model ? $"（由「{model}」自动选择）" : "")
-                  + " · 首次使用会自动下载，也可点下面按钮提前下",
+            Text = loaded
+                ? $"已下载：{display}{sizeNote}\n{dir}"
+                : $"未下载：{display}{sizeNote} · 首次开始聆听会自动下载，也可点下面按钮提前下",
             Style = (Style)FindResource("T3"),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 6, 0, 0),
@@ -833,7 +851,7 @@ public partial class SettingsPage : UserControl
 
                 if (mgr.Exists(resolved))
                 {
-                    status.Text = $"已下载：{resolved}（{mgr.SizeBytes(resolved) / 1048576.0:0.0} MB）";
+                    status.Text = $"已下载：{display}（{mgr.SizeBytes(resolved) / 1048576.0:0.0} MB）";
                     bar.Value = 1;
                     return;
                 }
@@ -848,7 +866,7 @@ public partial class SettingsPage : UserControl
                 });
                 var st = mgr.StateOf(resolved);
                 status.Text = ok && mgr.Exists(resolved)
-                    ? $"已下载：{resolved}"
+                    ? $"已下载：{display}（{mgr.SizeBytes(resolved) / 1048576.0:0.0} MB）"
                     : st.Message.Length > 0 ? st.Message : "下载失败";
             }
             catch (Exception ex)

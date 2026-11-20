@@ -31,7 +31,7 @@
     <!-- 实时字幕：音频捕获（WASAPI 回环 / 麦克风）+ 离线 ASR -->
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="Whisper.net" Version="1.9.1" />
-    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -45,4 +45,8 @@
     </Content>
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="2.0.2" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="2.0.2" />
+  </ItemGroup>
 </Project>

@@ -103,11 +103,14 @@ public class ConfigService : IConfigService
             {
                 ["threshold"] = 0.006, ["adaptive"] = true, ["migrated"] = false,
                 ["silence_ms"] = 450, ["min_speech_ms"] = 300, ["max_segment_ms"] = 6000,
+                ["preroll_ms"] = 300,
             },
             ["asr"] = new Dictionary<string, object?>
             {
-                // 模型：tiny / base / small；语言：auto / ja / en / zh
-                ["model"] = "auto", ["language"] = "auto",
+                // 引擎：auto / sensevoice / whisper；模型：auto / tiny / base / small / turbo / anime
+                // 语言：auto / ja / en / zh；GPU：auto / off / vulkan / cuda；线程：0 = 自动
+                ["engine"] = "auto", ["model"] = "auto", ["language"] = "auto",
+                ["gpu"] = "auto", ["threads"] = 0,
             },
             ["translate"] = new Dictionary<string, object?>
             {

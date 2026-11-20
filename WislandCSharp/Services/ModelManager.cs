@@ -70,52 +70,34 @@ public sealed class ModelManager
         }
     }
 
-    public string PathOf(string model) => Path.Combine(Dir, WhisperAsr.FileName(model));
+    /// <summary>模型存储层（多文件模型包：Whisper 单文件 / SenseVoice 两个文件）。</summary>
+    private AsrModelStore Store => new(Dir);
 
+    /// <summary>主文件路径（Whisper 是 ggml-*.bin；SenseVoice 是 model.int8.onnx）。</summary>
+    public string PathOf(string model) => Store.PrimaryPath(model);
+
+    /// <summary>第一个文件的续传缓存路径（UI 兼容用）。</summary>
     public string PartPathOf(string model) => PathOf(model) + ".part";
 
-    /// <summary>模型文件是否已完整存在（>10MB 且文件存在）。</summary>
-    public bool Exists(string model)
-    {
-        var path = PathOf(model);
-        try { return File.Exists(path) && new FileInfo(path).Length > 10 * 1024 * 1024; }
-        catch { return false; }
-    }
+    /// <summary>模型包是否完整（所有文件都在）。</summary>
+    public bool Exists(string model) => Store.Exists(model);
 
     /// <summary>已缓存但未下完的字节数（0 = 没有缓存）。</summary>
-    public long PartialBytes(string model)
-    {
-        try
-        {
-            var p = PartPathOf(model);
-            return File.Exists(p) ? new FileInfo(p).Length : 0;
-        }
-        catch { return 0; }
-    }
+    public long PartialBytes(string model) => Store.PartialBytes(model);
 
-    /// <summary>上次下载时记录的总大小（缓存文件旁的 .total，用于续传时先画出进度）。</summary>
-    public long TotalHintBytes(string model)
-    {
-        try
-        {
-            var p = PartPathOf(model) + ".total";
-            if (!File.Exists(p)) return 0;
-            return long.TryParse(File.ReadAllText(p).Trim(), out var v) ? v : 0;
-        }
-        catch { return 0; }
-    }
+    /// <summary>上次下载记录的总大小（用于续传时先画出进度）。</summary>
+    public long TotalHintBytes(string model) => Store.TotalHintBytes(model);
 
-    public long SizeBytes(string model)
-    {
-        try { var p = PathOf(model); return File.Exists(p) ? new FileInfo(p).Length : 0; }
-        catch { return 0; }
-    }
+    /// <summary>已下载正式文件的总字节数。</summary>
+    public long SizeBytes(string model) => Store.SizeBytes(model);
+
+    /// <summary>模型元信息（家族 / 体积 / 语言 / 硬件提示）。</summary>
+    public static AsrModelInfo? Info(string model) => AsrModels.Find(model);
 
     /// <summary>删除模型文件（不动 .part）。</summary>
     public void Delete(string model)
     {
-        try { if (File.Exists(PathOf(model))) File.Delete(PathOf(model)); }
-        catch { }
+        Store.Delete(model);
         ResetTransient(model);
         Raise(model);
     }
@@ -123,8 +105,7 @@ public sealed class ModelManager
     /// <summary>丢弃未完成缓存。</summary>
     public void ClearPartial(string model)
     {
-        try { if (File.Exists(PartPathOf(model))) File.Delete(PartPathOf(model)); } catch { }
-        try { if (File.Exists(PartPathOf(model) + ".total")) File.Delete(PartPathOf(model) + ".total"); } catch { }
+        Store.ClearPartial(model);
         ResetTransient(model);
         Raise(model);
     }
@@ -236,8 +217,7 @@ public sealed class ModelManager
 
         try
         {
-            var asr = new WhisperAsr(Dir);
-            await asr.DownloadAsync(model, p =>
+            await Store.DownloadAsync(model, p =>
             {
                 st.Progress = p.Ratio;
                 st.Bytes = p.Bytes;

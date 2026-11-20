@@ -146,7 +146,7 @@ public sealed class AudioCapture : IDisposable
             {
                 var desired = Math.Clamp(AgcTargetRms / rawRms, 1f, AgcMaxGain);
                 // 变安静时快速提增益，变响时缓慢回退，避免忽大忽小的"呼吸"
-                var rate = desired > _agcGain ? 0.25f : 0.02f;
+                var rate = desired > _agcGain ? 0.4f : 0.02f;
                 _agcGain += (desired - _agcGain) * rate;
             }
             else if (!AgcEnabled)

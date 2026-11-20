@@ -30,7 +30,7 @@ public class LiveService : ILiveService, IDisposable
     private const int FrameSize = SampleRate * FrameMs / 1000;   // 480
 
     private AudioCapture? _capture;
-    private WhisperAsr? _asr;
+    private AsrService? _asr;
     private CancellationTokenSource? _cts;
     private Task? _vadLoop;
     private readonly SemaphoreSlim _asrGate = new(1, 1);
@@ -123,17 +123,22 @@ public class LiveService : ILiveService, IDisposable
             var modelsDir = ServiceHub.Models?.Dir ?? FallbackModelsDir();
             Directory.CreateDirectory(modelsDir);
 
-            _asr = new WhisperAsr(modelsDir);
-            var model = WhisperAsr.ResolveModel(Cfg("live.asr.model", "auto"));
-            if (!_asr.Exists(model))
+            // 引擎选择：auto → SenseVoice 模型在场就优先 SenseVoice（更快），否则用 Whisper
+            var store = new AsrModelStore(modelsDir);
+            var cfg = ServiceHub.Config;
+            var chosen = AsrService.ResolveModelKey(cfg, store);
+            var info = AsrModels.Find(chosen);
+
+            if (!store.Exists(chosen))
             {
                 // 首次使用：应用内引导下载（带进度，可取消；.part 保留可续传）
-                Status?.Invoke(this, $"首次使用：正在下载语音模型 {model}（{WhisperAsr.FileName(model)}）…");
+                Status?.Invoke(this,
+                    $"首次使用：正在下载语音模型 {(info?.DisplayName ?? chosen)}（{info?.SizeMb ?? 0} MB）…");
                 DownloadingChanged?.Invoke(this, true);
                 bool ok;
                 try
                 {
-                    ok = await ServiceHub.Models.EnsureAsync(model, p =>
+                    ok = await ServiceHub.Models.EnsureAsync(chosen, p =>
                         Status?.Invoke(this, $"下载模型 {p.Ratio:P0}  {p.Text}"));
                 }
                 finally
@@ -141,7 +146,7 @@ public class LiveService : ILiveService, IDisposable
                     DownloadingChanged?.Invoke(this, false);
                 }
 
-                if (!ok || !_asr.Exists(model))
+                if (!ok || !store.Exists(chosen))
                 {
                     // 用户取消或下载失败：干净地停在这里，不启动音频捕获
                     Status?.Invoke(this, "已取消模型下载");
@@ -151,7 +156,18 @@ public class LiveService : ILiveService, IDisposable
                     return;
                 }
             }
-            _asr.UseModel(model);
+
+            _asr = new AsrService(cfg, store);
+            if (!_asr.Load(chosen))
+            {
+                var msg = "语音模型加载失败（可在翻译页 →「模型」检查或重新下载）";
+                Error?.Invoke(this, msg);
+                Status?.Invoke(this, msg);
+                lock (_runningLock) _running = false;
+                RunningChanged?.Invoke(this, false);
+                await SafeStopAsync();
+                return;
+            }
 
             // 2) 启动音频捕获
             _capture = new AudioCapture();
@@ -171,9 +187,10 @@ public class LiveService : ILiveService, IDisposable
             ResetVad();
             _vadLoop = Task.Run(() => VadLoopAsync(_cts.Token));
 
+            var engineLabel = _asr?.EngineLabel ?? "离线识别";
             Status?.Invoke(this, source == "mic"
-                ? "实时字幕已启动（麦克风）"
-                : "实时字幕已启动（系统音频）");
+                ? $"实时字幕已启动（麦克风 · {engineLabel}）"
+                : $"实时字幕已启动（系统音频 · {engineLabel}）");
         }
         catch (Exception ex)
         {
@@ -262,7 +279,9 @@ public class LiveService : ILiveService, IDisposable
         var noiseFloor = 0.002;
         var silenceMs = Math.Max(150, Cfg("live.vad.silence_ms", 450));
         var minSpeechMs = Math.Max(120, Cfg("live.vad.min_speech_ms", 300));
-        var maxSegmentMs = Math.Max(2000, Cfg("live.vad.max_segment_ms", 12000));
+        var maxSegmentMs = Math.Max(2000, Cfg("live.vad.max_segment_ms", 6000));
+        // VAD 总是比人声晚一点触发，加一段"预录"把句首补回来，避免识别结果缺头
+        var prerollMs = Math.Max(0, Math.Min(800, Cfg("live.vad.preroll_ms", 300)));
 
         while (!ct.IsCancellationRequested)
         {
@@ -292,7 +311,8 @@ public class LiveService : ILiveService, IDisposable
                         {
                             if (_speechFrom < 0)
                             {
-                                _speechFrom = _framePos;
+                                var prerollFrames = (int)(SampleRate * prerollMs / 1000.0);
+                                _speechFrom = Math.Max(0, _framePos - prerollFrames);
                                 _speechStartAt = now;
                                 App.DebugNote($"[VAD] 语音开始 rms={rms:0.0000} thr={thr:0.0000} 噪声底={noiseFloor:0.0000}");
                                 Partial?.Invoke(this, "…");

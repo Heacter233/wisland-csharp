@@ -40,7 +40,7 @@
 
 | 方向 | 改动 |
 | --- | --- |
-| **实时字幕** | 从占位实现变为**纯 C# 进程内管线**：WASAPI 回环 / 麦克风 → VAD 切句 → Whisper.net 离线识别 → DeepSeek（Google 兜底）翻译；翻译页新增分段、收起态字幕胶囊、实时音量条、一键清空。延迟 tiny ≈ 2s / base ≈ 4s（4 核） |
+| **实时字幕** | 从占位实现变为**纯 C# 进程内管线**：WASAPI 回环 / 麦克风 → AGC/归一化 → VAD 切句 → **SenseVoice / Whisper 离线识别** → 多引擎翻译；翻译页新增分段、收起态字幕胶囊、实时音量条、一键清空。SenseVoice 在 CPU 上约 0.2~0.5s/句，Whisper tiny ≈ 2s / base ≈ 4s（4 核） |
 | **语音模型管理** | 新增 tiny / base / small 三档模型卡片：下载、校验、设为默认、删除（两步确认）、清除缓存；**取消下载** 与 **HTTP Range 断点续传**；下载状态放在 `ModelManager` 服务层，切分段 / 切页面 / 重开窗口都不丢进度 |
 | **界面统一** | 模型管理不再占一个导航页，改为**翻译页「模型」分段**（文本 / 实时字幕 / 单词本 / 模型），与字幕设置放在同一处；`--page:model` 调试参数仍可直达 |
 | **天气** | 修 5 天预报星期错位一天（UTC 偏移导致日期漂移）；中文区县 / 县级市在 Open-Meteo 搜不到时改用 Nominatim 兜底 |
@@ -63,6 +63,9 @@ a67256d  feat(live): 实时字幕实装为纯 C# 离线管线（音频捕获 + V
 - **翻译多引擎**：新增 Index-Translate（B站免费 API）/ 智谱 GLM-4-Flash / Google / Bing，主引擎失败自动回退；手动翻译与实时字幕共用引擎链（设置页可切换与测试）。
 - **实时字幕音频修复**：回环捕获电平本来就低（实测约 1/3），原先没有增益、VAD 又是固定阈值 0.012，导致「只有很大声才识别」。
   现在加入 AGC 自动增益（目标约 -20dBFS）+ 峰值归一化 + 自适应噪声底阈值，并修复切句索引在裁剪缓冲后错位（导致每句只剩 40ms）的问题。
+- **ASR 多引擎**：新增 **SenseVoice-Small**（sherpa-onnx / ONNX，CPU 极快，中/日/英/韩/粤）与 Whisper 家族新模型
+  **large-v3-turbo**（q5 547MB）/ **anime-whisper**（1.4GB，日语动画特化）；Whisper 支持 **Vulkan / CUDA** GPU 加速开关；
+  模型页按引擎家族分组，标注体积 / 语言 / 推荐硬件。
 
 ### v0.2.0（已发布）
 
@@ -119,7 +122,7 @@ a67256d  feat(live): 实时字幕实装为纯 C# 离线管线（音频捕获 + V
 | 单词本 | ✅ | 本地 JSON 持久化 |
 | 设置界面 | ✅ | `config.json` 可视化卡片，分组 + 自动保存 |
 | 托盘 / 热键 / 主题 / 单实例 | ✅ | 深色 / 浅色 ⚠️**目前不要使用浅色主题**，目前未做浅色主题底板适配。/ 胭脂 / 天青 + auto |
-| 实时字幕 | ✅ | 纯 C# 进程内管线：WASAPI 回环 / 麦克风 → VAD 切句 → 离线 Whisper → 翻译；首次使用自动下载模型，模型管理支持取消与断点续传 |
+| 实时字幕 | ✅ | 纯 C# 进程内管线：WASAPI 回环 / 麦克风 → AGC → VAD 切句 → **SenseVoice（默认优先）/ Whisper** → 翻译；Whisper 支持 Vulkan/CUDA 加速，模型管理支持取消与断点续传 |
 | 液态形变（液桥 / 拉丝 / 贴边内凹圆角） | ❌ | 当前只有弹簧缩放与按压挤压，逐帧几何建模未移植 |
 | Anki 同步 | ❌ | 单词本只存本地，未接入 Anki |
 | 股票行情 | ✅ | **通过示例插件实现**（`samples/stock-plugin`）：自选股、大盘指数、分时/日K 迷你图、涨跌提醒 |
@@ -248,15 +251,18 @@ ServiceHub.Inbox.Push(new PluginMessage {
 翻译页「实时字幕」标签 + 收起态字幕胶囊，整条链路都在 C# 进程内完成，不依赖 Python：
 
 ```
-音频捕获          增益/归一            VAD 切句            离线识别              翻译
-WASAPI 回环   →    AGC → -20dBFS   →   自适应噪声底     →   Whisper.net      →   多引擎链
-或 麦克风          + 峰值归一化          + 静音 450ms         (GGML 模型)          (Index/智谱/DeepSeek/Google)
+音频捕获          增益/归一            VAD 切句            离线识别                      翻译
+WASAPI 回环   →    AGC → -20dBFS   →   自适应噪声底     →   SenseVoice-Small / Whisper   →   多引擎链
+或 麦克风          + 峰值归一化          + 静音 450ms         (ONNX / GGML)                 (Index/智谱/DeepSeek/Google)
 ```
 
 | 项 | 说明 |
 | --- | --- |
 | 音频源 | **系统音频回环**（看视频/游戏）或**麦克风**（会议），设置页切换 |
 | 采样 | 统一重采样为 16kHz 单声道（回环原始 48k 立体声 → 下混 + 线性重采样） |
+| **引擎选择** | `live.asr.engine`：`auto`（SenseVoice 已下载就优先，否则 Whisper）/ `sensevoice` / `whisper`；SenseVoice 加载失败自动回退 Whisper |
+| **模型** | SenseVoice：`sensevoice`（226MB，ONNX；中文/英文快，**日语实测较弱**，日语请用 Whisper）；Whisper：`tiny 75MB` / `base 142MB` / `small 466MB` / `turbo 547MB`（多语，需 GPU）/ `anime 1.4GB`（仅日语，需 GPU） |
+| **GPU** | `live.asr.gpu`：`auto`（Vulkan 优先）/ `off` / `vulkan` / `cuda`；Vulkan 对 AMD/Intel/NVIDIA 都可用，CUDA 需自备运行库（未随包），失败自动回退 CPU |
 | **增益** | **AGC 自动增益**（默认开，目标约 -20dBFS，上限 16x）+ Whisper 前峰值归一化；回环捕获电平本来就只有音源的 ~1/3，不放大很容易漏识别 |
 | 切句 | 30ms 帧计算 RMS；**阈值自适应环境噪声底**（`max(0.006, 噪声底×2.5)`），静音 450ms 即切句，单句最长 6s |
 | 识别 | Whisper.net + GGML 模型，可选 `tiny 75MB / base 142MB / small 466MB`，「自动」按 CPU 核心数选择 |
@@ -282,20 +288,21 @@ WASAPI 回环   →    AGC → -20dBFS   →   自适应噪声底     →   Whis
 
 | 功能 | 说明 |
 | --- | --- |
-| 模型卡片 | `tiny 75MB` / `base 142MB` / `small 466MB`，显示体积、是否已下载、**使用中** / **已暂停** 徽标 |
+| 模型卡片 | 按引擎家族分组：**SenseVoice**（`sensevoice` 226MB）与 **Whisper**（`tiny/base/small/turbo/anime`）；显示体积、语言、推荐硬件、是否已下载、**使用中** / **已暂停** 徽标 |
 | 下载 / 继续 / 重试 | 支持 **HTTP Range 断点续传**：取消、断网或关掉应用后 `.part` 保留，点「继续」从断点接着下，不再从 0 开始 |
 | 取消 | 下载中一键中断，已下部分保留（按钮在「取消 / 继续」之间切换） |
 | 进度不丢 | 下载任务与进度在 `ModelManager`（进程级服务）里，**切分段 / 切页面 / 重开窗口**都不会丢，回来按真实状态重建进度条 |
-| 校验 | 已下载时点「校验」：文件存在 + 大小 + GGML 魔数 |
-| 设为默认 | 写入 `live.asr.model`；设为默认后立即生效于下次聆听 |
+| 校验 | 已下载时点「校验」：多文件模型包逐文件检查（GGML 魔数 / ONNX 大小 / tokens 非空） |
+| 设为默认 | Whisper 模型写入 `live.asr.model` + `live.asr.engine=whisper`；SenseVoice 写入 `live.asr.engine=sensevoice`；下次聆听生效 |
 | 删除 / 清除缓存 | **两步确认**（首次点击变「确认删除」）；未下完时按钮是「清除缓存」只删 `.part`；字幕运行中禁用删除并提示先停止聆听 |
 | 目录 | 顶部显示 `…\data\models`，可一键打开目录 |
-| 自动选择 | 底部说明当前实际模型：`自动` 在 ≥8 核用 base、否则 tiny |
+| 自动选择 | 底部说明当前实际引擎与模型：`auto` 引擎优先 SenseVoice；Whisper 的 `auto` 在 ≥8 核用 base、否则 tiny |
 
 下载细节：
 
 - 源：`hf-mirror.com`（优先）→ `huggingface.co`（回退），两源共用同一个 `.part` 续传；
-- 断线保护：连续 45s 收不到数据判为超时，保留 `.part`；`HttpClient.Timeout` 设为无限，避免大文件被整段砍断；
+- 断线保护：连续 45s 收不到数据判为超时，保留 `.part`；连接/TLS 握手 20s、响应头 60s 超时（避免代理卡死时永远 0 字节），响应体不设总超时；
+- 多文件模型包：SenseVoice 是 `model.int8.onnx` + `tokens.txt`，逐文件续传、全部就位才算下载完成；
 - 脏文件自愈：魔数/大小校验失败时丢弃 `.part` 自动重下一次；
 - 实时字幕页的「开始聆听」在下载模型期间会变成「取消下载」，可直接中断。
 
