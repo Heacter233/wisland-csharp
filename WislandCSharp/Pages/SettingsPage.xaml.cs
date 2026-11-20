@@ -276,6 +276,16 @@ public partial class SettingsPage : UserControl
             cfg.Get("live.vad.threshold", 0.006).ToString("0.####"),
             "0.003~0.015，越大越难触发；自适应开启时作为下限"));
 
+        AddCard(liveSec, CardSlider("静音切句阈值", "live.vad.silence_ms", 150, 1500, 50,
+            cfg.Get("live.vad.silence_ms", 450),
+            v => v >= 1000 ? $"{v / 1000.0:0.##} 秒" : $"{v} ms"));
+
+        AddCard(liveSec, CardSlider("最长句时长", "live.vad.max_segment_ms", 2000, 20000, 500,
+            cfg.Get("live.vad.max_segment_ms", 12000),
+            v => $"{v / 1000.0:0.#} 秒"));
+
+        AddCard(liveSec, BuildVadTuningGuideCard());
+
         // ===== 热键设置 =====
         var hotkey = AddSection("热键设置", "格式：修饰键+键名，如 Ctrl+Alt+W；改完立即重新注册");
 
@@ -1058,6 +1068,26 @@ public partial class SettingsPage : UserControl
         return card;
     }
 
+    /// <summary>VAD 切句参数说明（静音阈值 / 最长句）。</summary>
+    private Border BuildVadTuningGuideCard()
+    {
+        var card = BaseCard("切句参数怎么调", "", out var body);
+        var tb = new TextBlock
+        {
+            Text = "• 静音切句阈值：说话停顿时长超过它才切句。\n"
+                 + "  太小（<300ms）会把句子切碎、字幕碎片化；太大（>1s）字幕出现更晚、长句更少。\n"
+                 + "• 最长句时长：一段话最多等多久强制切句。\n"
+                 + "  太小（<6s）长句被截断、翻译丢后半句；太大（>15s）字幕延迟明显。\n"
+                 + "推荐：静音 450ms / 最长 12 秒（默认）。改动在重启实时字幕后生效。",
+            FontSize = 10.5,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        tb.SetResourceReference(TextBlock.ForegroundProperty, "AppText3");
+        body.Children.Add(tb);
+        return card;
+    }
+
     /// <summary>人声处理说明卡：解释三种后端的区别（VoxLock 只保留一个人声）。</summary>
     private Border BuildEnhanceGuideCard()
     {
@@ -1209,6 +1239,14 @@ public partial class SettingsPage : UserControl
             case "island.collapse_delay_ms":
                 cfg.Set<int>(key, int.TryParse(value, out var ms) ? ms : 0);
                 ServiceHub.RequestTimings?.Invoke();
+                break;
+
+            case "live.vad.silence_ms":
+                cfg.Set<int>(key, Math.Clamp(int.TryParse(value, out var silenceMs) ? silenceMs : 450, 150, 1500));
+                break;
+
+            case "live.vad.max_segment_ms":
+                cfg.Set<int>(key, Math.Clamp(int.TryParse(value, out var segmentMs) ? segmentMs : 12000, 2000, 20000));
                 break;
 
             case "weather.interval_min":

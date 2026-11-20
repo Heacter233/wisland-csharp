@@ -285,7 +285,7 @@ WASAPI 回环   →   DPDFNet2/GTCRN 降噪    →   -22dBFS       →   自适�
 **识别不准 / 需要很大声时**：设置页 →「实时字幕」可调（改完重启字幕生效）：
 `live.enhance.mode` 人声处理（默认 dpdfnet；嘈杂环境可试 gtcrn，单人场景才用 voxlock）、
 `live.enhance.normalize` 增强后归一化（默认开）、`live.vad.threshold` 固定阈值下限（默认 0.006，越小越灵敏）、
-`live.vad.adaptive` 自适应阈值（默认开）。旧配置会自动迁移一次（0.012→0.006、切句上限 6s→12s、人声处理默认 DPDFNet）。
+`live.vad.adaptive` 自适应阈值（默认开）；静音切句阈值（150~1500ms）与最长句时长（2~20s）已做成设置页滑条。旧配置会自动迁移一次（0.012→0.006、切句上限 6s→12s、人声处理默认 DPDFNet）。
 
 ### 13. 模型管理（翻译页 →「模型」分段）
 
