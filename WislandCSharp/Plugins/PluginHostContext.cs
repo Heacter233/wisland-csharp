@@ -18,6 +18,7 @@ internal sealed class PluginHostContext : IPluginContext, IDisposable
 {
     private readonly List<IDisposable> _timers = new();
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly CancellationToken _shutdownToken;
     private readonly List<Action> _settingsBuilders = new();
     private readonly object _lock = new();
 
@@ -27,7 +28,8 @@ internal sealed class PluginHostContext : IPluginContext, IDisposable
     public string DataDirectory { get; }
     public string PluginDirectory { get; }
     public Dispatcher Ui { get; }
-    public CancellationToken ShutdownToken => _shutdown.Token;
+    /// <summary>宿主卸载信号。缓存令牌，Dispose 后插件再读取也不会抛 ObjectDisposedException。</summary>
+    public CancellationToken ShutdownToken => _shutdownToken;
     public string HostVersion { get; }
 
     /// <summary>插件通过 RegisterSettingsSection 注册的面板（可能为 null）。</summary>
@@ -53,6 +55,7 @@ internal sealed class PluginHostContext : IPluginContext, IDisposable
         System.IO.Directory.CreateDirectory(DataDirectory);
         Config = new PluginConfigStore(Path.Combine(DataDirectory, "config.json"));
         Log = new PluginLogger(Path.Combine(DataDirectory, "plugin.log"), manifest.Id);
+        _shutdownToken = _shutdown.Token;
     }
 
     public bool Has(string permission) => Manifest.Has(permission);
@@ -60,6 +63,12 @@ internal sealed class PluginHostContext : IPluginContext, IDisposable
     /// <summary>权限守门：未声明则拒绝并记日志。</summary>
     private bool Ensure(string permission, string action)
     {
+        // 已卸载/加载超时的插件仍在后台跑时，一律拒绝（否则"僵尸插件"还能继续推消息、注册页面）
+        if (_shutdownToken.IsCancellationRequested)
+        {
+            Log.Warn($"插件已卸载或加载失败，忽略：{action}");
+            return false;
+        }
         if (Manifest.Has(permission)) return true;
         Log.Warn($"权限不足：{action} 需要 \"{permission}\"，请在 plugin.json 的 permissions 中声明");
         return false;
@@ -106,6 +115,11 @@ internal sealed class PluginHostContext : IPluginContext, IDisposable
     public IDisposable RegisterTimer(TimeSpan interval, Action tick, bool runOnUi = true)
     {
         if (tick == null) return new NoopDisposable();
+        if (_shutdownToken.IsCancellationRequested)
+        {
+            Log.Warn("插件已卸载或加载失败，忽略：注册定时器");
+            return new NoopDisposable();
+        }
 
         // 最小 100ms：防止插件用高频定时器拖垮宿主
         if (interval < TimeSpan.FromMilliseconds(100)) interval = TimeSpan.FromMilliseconds(100);

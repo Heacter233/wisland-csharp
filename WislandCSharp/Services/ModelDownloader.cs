@@ -66,7 +66,9 @@ internal static class ModelDownloader
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    await DownloadFromAsync(url, tmp, progress, totalHint, ct);
+                    // 纯 IO 链路，不依赖 UI 上下文：显式 ConfigureAwait(false)，
+                    // 避免把进度回调/续传循环绑定到调用方的 SynchronizationContext。
+                    await DownloadFromAsync(url, tmp, progress, totalHint, ct).ConfigureAwait(false);
 
                     if (!IsValidFile(tmp, expectedBytes, tokenFile: false))
                         throw new InvalidDataException("文件大小与预期不符，可能下载不完整");
@@ -134,7 +136,8 @@ internal static class ModelDownloader
         // 只给"等响应头"阶段加超时（60s），拿到响应后由停滞看门狗接管
         using var headerTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         headerTimeout.CancelAfter(TimeSpan.FromSeconds(60));
-        using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, headerTimeout.Token);
+        using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, headerTimeout.Token)
+            .ConfigureAwait(false);
         if (resp.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
             throw new InvalidDataException("续传位置无效（416），需要重新下载");
 
@@ -155,7 +158,7 @@ internal static class ModelDownloader
         using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
         stall.CancelAfter(StallMs);
 
-        await using var input = await resp.Content.ReadAsStreamAsync(stall.Token);
+        await using var input = await resp.Content.ReadAsStreamAsync(stall.Token).ConfigureAwait(false);
         await using var output = new FileStream(tmp,
             offset > 0 ? FileMode.Append : FileMode.Create,
             FileAccess.Write, FileShare.None, BufferBytes, useAsync: true);
@@ -169,7 +172,7 @@ internal static class ModelDownloader
             int read;
             try
             {
-                read = await input.ReadAsync(buffer, 0, buffer.Length, stall.Token);
+                read = await input.ReadAsync(buffer, 0, buffer.Length, stall.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -177,7 +180,7 @@ internal static class ModelDownloader
             }
             if (read <= 0) break;
 
-            await output.WriteAsync(buffer, 0, read, CancellationToken.None);
+            await output.WriteAsync(buffer, 0, read, CancellationToken.None).ConfigureAwait(false);
             done += read;
             stall.CancelAfter(StallMs);
 
@@ -191,7 +194,7 @@ internal static class ModelDownloader
             }
         }
 
-        await output.FlushAsync(CancellationToken.None);
+        await output.FlushAsync(CancellationToken.None).ConfigureAwait(false);
 
         if (total > 0 && done < total)
             throw new IOException($"连接提前结束（{Mb(done)} / {Mb(total)} MB），已保存，可继续下载");

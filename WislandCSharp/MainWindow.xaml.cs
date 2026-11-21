@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -411,21 +412,41 @@ public partial class MainWindow : Window
     /// <summary>加载全部插件并安装页面/设置分组（启动与热重载共用）。</summary>
     private void LoadPluginsAndInstall()
     {
-        var results = Plugins.PluginLoader.LoadAll(
-            AppPaths.BaseDir,
-            ServiceHub.Config.DataDir,
-            ServiceHub.Config);
+        // 后台加载：插件 OnLoad 是第三方代码，不能占着 UI 线程等它
+        _ = LoadPluginsAndInstallAsync();
+    }
 
-        foreach (var r in results)
+    private async Task LoadPluginsAndInstallAsync()
+    {
+        try
         {
-            if (r.State == Plugins.PluginState.Failed)
-                App.LogCrash($"plugin [{r.Manifest?.Id ?? System.IO.Path.GetFileName(r.Directory)}]", new Exception(r.Error));
+            var results = await Plugins.PluginLoader.LoadAllAsync(
+                AppPaths.BaseDir,
+                ServiceHub.Config.DataDir,
+                ServiceHub.Config,
+                Dispatcher);
+
+            // 回到 UI 线程安装页面/设置分组（视觉树只能在 UI 线程动）
+            await Dispatcher.InvokeAsync(() =>
+            {
+                foreach (var r in results)
+                {
+                    if (r.State == Plugins.PluginState.Failed)
+                        App.LogCrash($"plugin [{r.Manifest?.Id ?? System.IO.Path.GetFileName(r.Directory)}]",
+                            new Exception(r.Error));
+                }
+
+                // 插件页：主导航下方单独一行（无页面时该行不占高度）
+                InstallPluginPages(results);
+
+                App.DebugNote($"plugins: {results.Count} 个目录，" +
+                              $"成功 {results.Count(x => x.State == Plugins.PluginState.Loaded)}");
+            });
         }
-
-        // 插件页：主导航下方单独一行（无页面时该行不占高度）
-        InstallPluginPages(results);
-
-        App.DebugNote($"plugins: {results.Count} 个目录，成功 {results.Count(x => x.State == Plugins.PluginState.Loaded)}");
+        catch (Exception ex)
+        {
+            App.LogCrash("plugins load", ex);
+        }
     }
 
     /// <summary>
@@ -438,43 +459,51 @@ public partial class MainWindow : Window
     {
         if (_pluginReloading) return;
         _pluginReloading = true;
+        _ = ReloadPluginsAsync();
+    }
 
+    private async Task ReloadPluginsAsync()
+    {
         var currentWasPlugin = IsPluginPage(_currentPage);
         var currentKey = _currentPage;
         try
         {
             App.DebugNote($"plugins: 热重载开始（{_pluginWatcher?.LastReason}）");
 
-            var results = Plugins.PluginLoader.Reload(
+            var results = await Plugins.PluginLoader.ReloadAsync(
                 AppPaths.BaseDir,
                 ServiceHub.Config.DataDir,
-                ServiceHub.Config);
+                ServiceHub.Config,
+                Dispatcher);
 
-            foreach (var r in results)
+            await Dispatcher.InvokeAsync(() =>
             {
-                if (r.State == Plugins.PluginState.Failed)
-                    App.LogCrash($"plugin reload [{r.Manifest?.Id ?? System.IO.Path.GetFileName(r.Directory)}]",
-                        new Exception(r.Error));
-            }
+                foreach (var r in results)
+                {
+                    if (r.State == Plugins.PluginState.Failed)
+                        App.LogCrash($"plugin reload [{r.Manifest?.Id ?? System.IO.Path.GetFileName(r.Directory)}]",
+                            new Exception(r.Error));
+                }
 
-            InstallPluginPages(results);
+                InstallPluginPages(results);
 
-            // 当前页是被卸载/改名的插件页 → 退回主页，避免停在空白页
-            if (currentWasPlugin && !_pluginPages.ContainsKey(currentKey))
-            {
-                ShowPage("home", force: true);
-            }
-            else if (_pluginPages.ContainsKey(currentKey))
-            {
-                // 仍在，但视图是新构建的实例，需要重新挂到页面上
-                ShowPage(currentKey, force: true);
-            }
+                // 当前页是被卸载/改名的插件页 → 退回主页，避免停在空白页
+                if (currentWasPlugin && !_pluginPages.ContainsKey(currentKey))
+                {
+                    ShowPage("home", force: true);
+                }
+                else if (_pluginPages.ContainsKey(currentKey))
+                {
+                    // 仍在，但视图是新构建的实例，需要重新挂到页面上
+                    ShowPage(currentKey, force: true);
+                }
 
-            // 设置页在显示中则重建（插件分组、状态、权限都会变）
-            if (_pages.TryGetValue("set", out var sp) && sp is Pages.SettingsPage setPage)
-                setPage.Rebuild();
+                // 设置页在显示中则重建（插件分组、状态、权限都会变）
+                if (_pages.TryGetValue("set", out var sp) && sp is Pages.SettingsPage setPage)
+                    setPage.Rebuild();
 
-            App.DebugNote($"plugins: 热重载完成，成功 {results.Count(x => x.State == Plugins.PluginState.Loaded)}");
+                App.DebugNote($"plugins: 热重载完成，成功 {results.Count(x => x.State == Plugins.PluginState.Loaded)}");
+            });
         }
         catch (Exception ex)
         {
@@ -494,31 +523,38 @@ public partial class MainWindow : Window
     {
         if (_pluginReloading) return;
         _pluginReloading = true;
+        _ = ReloadPluginAsync(id);
+    }
 
+    private async Task ReloadPluginAsync(string id)
+    {
         var currentKey = _currentPage;
         var currentWasPlugin = IsPluginPage(currentKey);
         try
         {
             App.DebugNote($"plugins: 单独重载 {id}");
 
-            var result = Plugins.PluginLoader.ReloadOne(
-                id, AppPaths.BaseDir, ServiceHub.Config.DataDir, ServiceHub.Config);
+            var result = await Plugins.PluginLoader.ReloadOneAsync(
+                id, AppPaths.BaseDir, ServiceHub.Config.DataDir, ServiceHub.Config, Dispatcher);
 
-            if (result != null && result.State == Plugins.PluginState.Failed)
-                App.LogCrash($"plugin reload [{id}]", new Exception(result.Error));
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (result != null && result.State == Plugins.PluginState.Failed)
+                    App.LogCrash($"plugin reload [{id}]", new Exception(result.Error));
 
-            // 页面行按最新的加载结果整体重建（新增/移除/改名都能反映）
-            InstallPluginPages(Plugins.PluginLoader.Loaded);
+                // 页面行按最新的加载结果整体重建（新增/移除/改名都能反映）
+                InstallPluginPages(Plugins.PluginLoader.Loaded);
 
-            if (currentWasPlugin && !_pluginPages.ContainsKey(currentKey))
-                ShowPage("home", force: true);
-            else if (_pluginPages.ContainsKey(currentKey))
-                ShowPage(currentKey, force: true);
+                if (currentWasPlugin && !_pluginPages.ContainsKey(currentKey))
+                    ShowPage("home", force: true);
+                else if (_pluginPages.ContainsKey(currentKey))
+                    ShowPage(currentKey, force: true);
 
-            if (_pages.TryGetValue("set", out var sp) && sp is Pages.SettingsPage setPage)
-                setPage.Rebuild();
+                if (_pages.TryGetValue("set", out var sp) && sp is Pages.SettingsPage setPage)
+                    setPage.Rebuild();
 
-            App.DebugNote($"plugins: 单独重载完成 {id}（{result?.State.ToString() ?? "已移除"}）");
+                App.DebugNote($"plugins: 单独重载完成 {id}（{result?.State.ToString() ?? "已移除"}）");
+            });
         }
         catch (Exception ex)
         {
@@ -1009,6 +1045,25 @@ public partial class MainWindow : Window
             }
         });
 
+        // 调试：--quit-after=毫秒 让程序自动退出（用于测量退出路径耗时/回归验证）
+        Try("quit-after", () =>
+        {
+            var arg = Environment.GetCommandLineArgs()
+                .FirstOrDefault(a => a.StartsWith("--quit-after=", StringComparison.OrdinalIgnoreCase));
+            if (arg == null) return;
+            if (!int.TryParse(arg["--quit-after=".Length..], out var ms) || ms < 500) return;
+
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ms) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                App.DebugNote($"quit-after: 触发退出（{ms}ms）");
+                Application.Current.Shutdown();
+            };
+            timer.Start();
+            App.DebugNote($"quit-after: {ms}ms 后自动退出");
+        });
+
         Try("debugpage", () =>
         {
             var arg = Environment.GetCommandLineArgs()
@@ -1072,11 +1127,19 @@ public partial class MainWindow : Window
             {
                 if (!arg.StartsWith("--open-test=", StringComparison.OrdinalIgnoreCase)) continue;
                 var kind = arg["--open-test=".Length..];
-                var ok = Services.AppLauncher.Launch(kind,
-                    ServiceHub.Config.Get($"notify.open.{kind}", ""));
-                System.IO.File.AppendAllText(
-                    System.IO.Path.Combine(Services.AppPaths.DataDir, "app-launch.log"),
-                    $"{DateTime.Now:HH:mm:ss.fff} [open-test] result={ok}{Environment.NewLine}");
+                var configured = ServiceHub.Config.Get($"notify.open.{kind}", "");
+                // 后台执行并记录结果（这条链路会轮询等窗口，不能占用 UI 线程）
+                _ = Services.AppLauncher.LaunchAsync(kind, configured).ContinueWith(t =>
+                {
+                    var ok = t.Status == TaskStatus.RanToCompletion && t.Result;
+                    try
+                    {
+                        System.IO.File.AppendAllText(
+                            System.IO.Path.Combine(Services.AppPaths.DataDir, "app-launch.log"),
+                            $"{DateTime.Now:HH:mm:ss.fff} [open-test] result={ok}{Environment.NewLine}");
+                    }
+                    catch { }
+                });
             }
         });
 

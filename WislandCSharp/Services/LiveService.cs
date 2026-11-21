@@ -56,6 +56,17 @@ public class LiveService : ILiveService, IDisposable
     private bool _running;
     private readonly object _runningLock = new();
 
+    /// <summary>
+    /// 启动代次。每次 Start/Stop 自增，StartAsync 在每个 await 恢复点比对：
+    /// 不一致说明"启动过程中用户已经点了停止"，直接放弃后续步骤。
+    ///
+    /// 之前没有这个检查：点开始后立刻点停止 → StopAsync 置 _running=false 时 _capture 还是 null，
+    /// 于是"空停"一次；随后 StartAsync 继续跑完并创建采集与 VAD 线程 →
+    /// UI 显示已停止但音频还在采、VAD 还在识别，再点停止又会 `if (!_running) return`，
+    /// 表现就是"永远停不下来的幽灵运行"。
+    /// </summary>
+    private int _generation;
+
     // 翻译统一交给 ServiceHub.Translate（多引擎 + 回退链），本服务不再自己发翻译请求
 
     public event EventHandler<string>? Status;
@@ -107,15 +118,20 @@ public class LiveService : ILiveService, IDisposable
         return Path.Combine(baseDir, dir);
     }
 
-    /// <summary>
-    ///     // ---------------- 生命周期 ----------------
+    // ---------------- 生命周期 ----------------
 
+    /// <summary>
+    /// 启动实时字幕：准备模型（必要时下载）→ 人声处理 → 音频捕获 → VAD 循环。
+    /// 每个 await 恢复点都会复查 <see cref="_generation"/>，用户中途点停止时立刻放弃。
+    /// </summary>
     public async Task StartAsync()
     {
+        int gen;
         lock (_runningLock)
         {
             if (_running) return;
             _running = true;
+            gen = ++_generation;
         }
 
         try
@@ -159,6 +175,13 @@ public class LiveService : ILiveService, IDisposable
                     await SafeStopAsync();
                     return;
                 }
+            }
+
+            // 下载可能要几分钟：这期间用户完全可能点了停止
+            if (!IsCurrentStart(gen))
+            {
+                Status?.Invoke(this, "已取消启动");
+                return;
             }
 
             // 跨启停复用已加载模型：反复新建/销毁 WhisperFactory 会反复创建 Vulkan 设备，
@@ -213,6 +236,13 @@ public class LiveService : ILiveService, IDisposable
                     {
                         Status?.Invoke(this, "人声处理模型未下载，已回退为「不处理」");
                         enhanceMode = AudioEnhancer.ModeOff;
+                    }
+
+                    // 第二个 await 恢复点：同样要复查，否则关掉后仍会继续起采集
+                    if (!IsCurrentStart(gen))
+                    {
+                        Status?.Invoke(this, "已取消启动");
+                        return;
                     }
                 }
 
@@ -292,6 +322,8 @@ public class LiveService : ILiveService, IDisposable
     {
         lock (_runningLock)
         {
+            // 代次自增：让"仍在启动中的那段流程"作废
+            _generation++;
             if (!_running) return;
             _running = false;
         }
@@ -307,28 +339,48 @@ public class LiveService : ILiveService, IDisposable
         }
     }
 
-    private async Task SafeStopAsync()
+    /// <summary>本次启动是否仍然有效（未被停止/重启抢占）。</summary>
+    private bool IsCurrentStart(int generation)
     {
+        lock (_runningLock) return _running && _generation == generation;
+    }
+
+    /// <summary>
+    /// 同步拆掉采集与 VAD（不等待 VAD 线程退出），返回该线程的 Task 供调用方决定等多久。
+    /// 供退出路径使用：旧实现 <c>StopAsync(wait:true).Wait(3000)</c> 在 UI 线程上阻塞，
+    /// 而 StopAsync 的续体又要回到同一个 UI 线程，于是每次退出必然吃满 3 秒超时。
+    /// </summary>
+    private Task? DetachCapture()
+    {
+        var vad = _vadLoop;
+        _vadLoop = null;
+
         try { _cts?.Cancel(); } catch { }
 
         if (_capture != null)
         {
             _capture.Samples -= OnSamples;
             try { _capture.Stop(); } catch { }
-            _capture.Dispose();
+            try { _capture.Dispose(); } catch { }
             _capture = null;
         }
 
+        return vad;
+    }
+
+    private async Task SafeStopAsync()
+    {
+        var vad = DetachCapture();
+
         // 等 VAD 线程退出：它可能正在 HandleSegmentAsync 里跑 ASR，
         // 这时释放 WhisperFactory / sherpa recognizer 属于原生 use-after-free，会直接崩进程。
-        if (_vadLoop != null)
+        if (vad != null)
         {
-            if (await Task.WhenAny(_vadLoop, Task.Delay(8000)) != _vadLoop)
+            if (await Task.WhenAny(vad, Task.Delay(8000)).ConfigureAwait(false) != vad)
                 Debug.WriteLine("[LiveService] 警告：VAD 线程 8s 内未退出");
-            _vadLoop = null;
         }
 
-        _cts?.Dispose();
+        try { _cts?.Dispose(); } catch { }
         _cts = null;
 
         // 注意：这里刻意【不销毁】已加载的 ASR / 增强器。
@@ -598,19 +650,37 @@ public class LiveService : ILiveService, IDisposable
 
     public void Dispose()
     {
+        // 同步收尾：不再 StopAsync(...).Wait(3000)。
+        // 旧写法的问题有两个：① StopAsync 的续体要被投递回正被阻塞的 UI Dispatcher，
+        // 运行中退出必然吃满 3 秒；② 超时后直接 Dispose 原生 ASR/增强器，
+        // 而 VAD 线程可能还在 whisper.cpp / sherpa-onnx 里推理 → use-after-free（退出闪退）。
+        Task? vad = null;
         if (Running)
         {
-            try { StopAsync(wait: true).Wait(3000); } catch { }
+            lock (_runningLock) { _running = false; _generation++; }
+            vad = DetachCapture();
         }
 
-        lock (_enhancerLock)
+        // 先等 VAD 线程自己退出，再释放它正在使用的原生对象
+        var drained = vad == null || vad.Wait(TimeSpan.FromSeconds(8));
+        if (!drained)
         {
-            try { _enhancer?.Dispose(); } catch { }
-            _enhancer = null;
+            // 极端情况：线程卡在原生推理里。宁可泄漏也不释放，因为释放会直接崩进程。
+            App.DebugNote("[LiveService] 退出时 VAD 线程 8s 内未退出，跳过原生释放以避免 use-after-free");
         }
-        try { _asr?.Dispose(); } catch { }
-        _asr = null;
+        else
+        {
+            lock (_enhancerLock)
+            {
+                try { _enhancer?.Dispose(); } catch { }
+                _enhancer = null;
+            }
+            try { _asr?.Dispose(); } catch { }
+            _asr = null;
+        }
 
+        try { _cts?.Dispose(); } catch { }
+        _cts = null;
         try { _asrGate.Dispose(); } catch { }
     }
 }

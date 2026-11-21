@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 
 namespace Wisland.Services;
@@ -71,8 +72,16 @@ public static class AppLauncher
             "mailto:"),
     };
 
-    /// <summary>启动（或唤出）指定类型的程序；成功返回 true。</summary>
-    public static bool Launch(string kind, string? configuredPath = null)
+    /// <summary>
+    /// 启动（或唤出）指定类型的程序；成功返回 true。
+    ///
+    /// 注意：内部有多段"等窗口出现"的轮询（最长约 8.5 秒），**必须异步调用**。
+    /// 早期版本是同步方法，调用方又都在 UI 事件里，于是点一下消息磁贴就冻结界面 8 秒多。
+    /// </summary>
+    public static Task<bool> LaunchAsync(string kind, string? configuredPath = null)
+        => Task.Run(() => LaunchCore(kind, configuredPath));
+
+    private static bool LaunchCore(string kind, string? configuredPath)
     {
         kind = (kind ?? "").Trim().ToLowerInvariant();
         var target = Targets.FirstOrDefault(t => t.Kind == kind);

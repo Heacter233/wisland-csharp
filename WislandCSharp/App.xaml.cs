@@ -119,11 +119,18 @@ public partial class App : Application
         base.OnExit(e);
     }
 
-    /// <summary>退出链的单个步骤：失败只记日志，不阻断后续释放。</summary>
+    /// <summary>退出链的单个步骤：失败只记日志，不阻断后续释放；慢步骤也会记录耗时。</summary>
     private static void Step(string name, Action action)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         try { action(); }
         catch (Exception ex) { DebugNote($"exit[{name}]: {ex.GetType().Name} {ex.Message}"); }
+        finally
+        {
+            sw.Stop();
+            // 超过 50ms 的收尾步骤值得记一笔：退出卡顿基本都能在这里定位到
+            if (sw.ElapsedMilliseconds > 50) DebugNote($"exit[{name}]: {sw.ElapsedMilliseconds}ms");
+        }
     }
 
     public static string CrashLogPath => AppPaths.CrashLog;

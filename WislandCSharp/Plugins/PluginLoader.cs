@@ -77,9 +77,14 @@ public static class PluginLoader
 
     /// <summary>
     /// 扫描并加载全部插件，结果写入 <see cref="PluginRegistry"/>。
-    /// 必须在 UI 线程调用（需要 Dispatcher）。
+    ///
+    /// 必须在后台线程 await（不要同步 Wait）：OnLoad 是插件自己的代码，可能耗时或阻塞，
+    /// 早期版本在 UI 线程 <c>loadTask.Wait(8s)</c>，插件若在 OnLoad 里 Ui.Invoke(...) 就会与宿主互等，
+    /// 表现为启动卡满 8 秒后判定插件失败。
     /// </summary>
-    public static IReadOnlyList<PluginLoadResult> LoadAll(string baseDir, string dataDir, IConfigService config)
+    /// <param name="ui">UI Dispatcher（用于插件定时器/回调，必须由调用方从 UI 线程传入）。</param>
+    public static async Task<IReadOnlyList<PluginLoadResult>> LoadAllAsync(
+        string baseDir, string dataDir, IConfigService config, Dispatcher ui)
     {
         var root = PluginsRoot(baseDir);
         var dataRoot = PluginDataRoot(dataDir);
@@ -88,14 +93,13 @@ public static class PluginLoader
         // 上一轮进程遗留的影子目录：尽量清掉（被占用就跳过）
         PluginShadow.CleanupAll(shadowRoot);
         var disabled = ReadDisabled(config);
-        var ui = Dispatcher.CurrentDispatcher;
         var results = new List<PluginLoadResult>();
 
         Directory.CreateDirectory(root);
         Directory.CreateDirectory(dataRoot);
 
         foreach (var dir in SafeGetDirectories(root))
-            results.Add(LoadDirectory(dir, disabled, ui, dataRoot, shadowRoot));
+            results.Add(await LoadDirectoryAsync(dir, disabled, ui, dataRoot, shadowRoot).ConfigureAwait(false));
 
         // 注册到设置页
         foreach (var r in results) RegisterToRegistry(r);
@@ -115,14 +119,14 @@ public static class PluginLoader
     /// 会先卸载该插件、清掉它的注册表条目，再重新扫描/加载它自己的目录。
     /// 目录被删掉时返回 null（调用方据此重建页面列表即可）。
     /// </summary>
-    public static PluginLoadResult? ReloadOne(string id, string baseDir, string dataDir, IConfigService config)
+    public static async Task<PluginLoadResult?> ReloadOneAsync(
+        string id, string baseDir, string dataDir, IConfigService config, Dispatcher ui)
     {
         if (string.IsNullOrWhiteSpace(id)) return null;
 
         var root = PluginsRoot(baseDir);
         var dataRoot = PluginDataRoot(dataDir);
         var shadowRoot = Path.Combine(dataRoot, ".shadow");
-        var ui = Dispatcher.CurrentDispatcher;
 
         PluginLoadResult? old = null;
         lock (_lock)
@@ -145,7 +149,8 @@ public static class PluginLoader
             return null;
         }
 
-        var result = LoadDirectory(dir, ReadDisabled(config), ui, dataRoot, shadowRoot);
+        var result = await LoadDirectoryAsync(dir, ReadDisabled(config), ui, dataRoot, shadowRoot)
+            .ConfigureAwait(false);
 
         lock (_lock) _loaded.Add(result);
         RegisterToRegistry(result);
@@ -176,7 +181,7 @@ public static class PluginLoader
     }
 
     /// <summary>加载一个插件目录（含清单校验）。失败时返回 Failed 结果而不是抛异常。</summary>
-    private static PluginLoadResult LoadDirectory(
+    private static async Task<PluginLoadResult> LoadDirectoryAsync(
         string dir, HashSet<string> disabled, Dispatcher ui, string dataRoot, string shadowRoot)
     {
         var manifestPath = Path.Combine(dir, "plugin.json");
@@ -226,30 +231,36 @@ public static class PluginLoader
                 Error = $"需要宿主 ≥ {manifest.MinHostVersion}，当前 {HostVersion}",
             };
 
-        return LoadOne(manifest, dataRoot, shadowRoot, ui);
+        return await LoadOneAsync(manifest, dataRoot, shadowRoot, ui).ConfigureAwait(false);
     }
 
     /// <summary>
     /// 卸载全部插件后重新扫描加载（热重载）。
     /// 因为加载走影子副本，源目录的 dll 从未被锁定，用户可以直接覆盖文件后重载。
     /// </summary>
-    public static IReadOnlyList<PluginLoadResult> Reload(string baseDir, string dataDir, IConfigService config)
+    public static async Task<IReadOnlyList<PluginLoadResult>> ReloadAsync(
+        string baseDir, string dataDir, IConfigService config, Dispatcher ui)
     {
         UnloadAll();
 
-        // 帮一把回收：让刚 Unload 的 ALC 尽早释放（不强制，失败也无妨）
-        try
+        // 帮一把回收：让刚 Unload 的 ALC 尽早释放（放到线程池做全量 GC，
+        // 避免热重载时在 UI 线程上停顿——宿主此前是在 UI 线程两次 GC.Collect）
+        await Task.Run(() =>
         {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-        }
-        catch { }
+            try
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            }
+            catch { }
+        }).ConfigureAwait(false);
 
-        return LoadAll(baseDir, dataDir, config);
+        return await LoadAllAsync(baseDir, dataDir, config, ui).ConfigureAwait(false);
     }
 
-    private static PluginLoadResult LoadOne(PluginManifest manifest, string dataRoot, string shadowRoot, Dispatcher ui)
+    private static async Task<PluginLoadResult> LoadOneAsync(
+        PluginManifest manifest, string dataRoot, string shadowRoot, Dispatcher ui)
     {
         PluginLoadContext? alc = null;
         PluginHostContext? ctx = null;
@@ -275,22 +286,46 @@ public static class PluginLoader
 
             ctx = new PluginHostContext(manifest, ui, HostVersion, dataRoot);
 
-            // OnLoad 放后台执行并限时，避免插件阻塞宿主启动
+            // OnLoad 限时执行（不阻塞 UI 线程：这里是 await 而不是 Wait）
             var loadTask = Task.Run(() =>
             {
                 instance.OnLoad(ctx);
                 return true;
             });
 
-            if (!loadTask.Wait(TimeSpan.FromSeconds(LoadTimeoutSeconds)))
+            if (await Task.WhenAny(loadTask, Task.Delay(TimeSpan.FromSeconds(LoadTimeoutSeconds)))
+                    .ConfigureAwait(false) != loadTask)
             {
-                ctx.Log.Error($"OnLoad 超过 {LoadTimeoutSeconds} 秒未返回，已判定加载失败（插件可能仍在后台运行）");
+                // 超时：插件线程停不下来（.NET 无法强杀线程），但必须让它失去能力——
+                // 撤销上下文（停掉定时器 + 后续 ctx 调用一律拒绝），否则就是"设置页显示失败、
+                // 消息页却还在收它推送"的僵尸插件。
+                ctx.Log.Error($"OnLoad 超过 {LoadTimeoutSeconds} 秒未返回，已判定加载失败并撤销其上下文");
+                try { ctx.Dispose(); } catch { }
+
                 return new PluginLoadResult
                 {
                     Manifest = manifest,
                     Directory = manifest.Directory,
                     State = PluginState.Failed,
                     Error = $"OnLoad 超时（>{LoadTimeoutSeconds}s）",
+                    Instance = instance,
+                    Context = ctx,
+                    LoadContext = alc,
+                };
+            }
+
+            // 让 OnLoad 里的异常浮上来（而不是静默变成"加载成功"）
+            try { await loadTask.ConfigureAwait(false); }
+            catch (Exception loadEx)
+            {
+                var innerLoad = loadEx is AggregateException aggLoad ? aggLoad.Flatten().InnerException ?? loadEx : loadEx;
+                ctx.Log.Error("OnLoad 抛出异常", innerLoad);
+                return new PluginLoadResult
+                {
+                    Manifest = manifest,
+                    Directory = manifest.Directory,
+                    State = PluginState.Failed,
+                    Error = "OnLoad 失败：" + innerLoad.GetBaseException().Message,
                     Instance = instance,
                     Context = ctx,
                     LoadContext = alc,

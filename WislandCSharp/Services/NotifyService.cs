@@ -382,7 +382,8 @@ public sealed class NotifyService : IDisposable
         var configured = _config.Get($"notify.open.{kind}", "");
         // 配置路径 → 运行中进程 → 已知安装路径 → 开始菜单快捷方式 → 卸载注册表 → URI 协议
         // （只靠 tencent:// / weixin:// 在多数机器上没注册，点了会毫无反应）
-        AppLauncher.Launch(kind, configured);
+        // 后台执行：这条链最长会轮询 8.5 秒，放 UI 线程上会把整个岛冻住
+        _ = AppLauncher.LaunchAsync(kind, configured);
     }
 
     public void Dispose()
