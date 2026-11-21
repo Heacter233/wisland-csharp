@@ -374,6 +374,20 @@ public static class PluginLoader
     private static void RegisterToRegistry(PluginLoadResult r)
     {
         var m = r.Manifest;
+
+        // 登记/撤销 Inbox 允许的来源 id：插件推送消息时 Source 必须是自己的 id，
+        // 否则 MessageInbox.Push 会直接丢弃（防止冒充 qq/wechat/mail 或借别的插件 id）。
+        try
+        {
+            var srcId = m?.Id ?? "";
+            if (srcId.Length > 0)
+            {
+                if (r.State == PluginState.Loaded) ServiceHub.Inbox.RegisterPluginSource(srcId);
+                else ServiceHub.Inbox.UnregisterPluginSource(srcId);
+            }
+        }
+        catch { }
+
         PluginRegistry.Register(new PluginInfo
         {
             Id = m?.Id ?? Path.GetFileName(r.Directory),
@@ -408,6 +422,13 @@ public static class PluginLoader
             try { r.Instance?.OnUnload(); } catch { }
             try { r.Context?.Dispose(); } catch { }
             try { r.LoadContext?.Unload(); } catch { }
+            // 撤销 Inbox 来源登记：卸载后同名来源的消息不应再被接受
+            try
+            {
+                var id = r.Manifest?.Id ?? "";
+                if (id.Length > 0) ServiceHub.Inbox.UnregisterPluginSource(id);
+            }
+            catch { }
         }
         PluginRegistry.Clear();
     }
@@ -438,8 +459,19 @@ public static class PluginLoader
     private static bool VersionOk(string minHostVersion)
     {
         if (string.IsNullOrWhiteSpace(minHostVersion)) return true;
-        if (!Version.TryParse(Normalize(minHostVersion), out var min)) return true;
-        if (!Version.TryParse(Normalize(HostVersion), out var host)) return true;
+
+        // fail-closed：清单里写了要求却解析不出来（"latest" / "0.2.0-beta" 这类），
+        // 宁可拒绝加载也不要"放行一个自称需要新版本的插件"。
+        if (!Version.TryParse(Normalize(minHostVersion), out var min))
+        {
+            AppDebug($"插件 minHostVersion 无法解析：'{minHostVersion}'，按不满足处理");
+            return false;
+        }
+        if (!Version.TryParse(Normalize(HostVersion), out var host))
+        {
+            AppDebug($"宿主版本无法解析：'{HostVersion}'，按不满足处理");
+            return false;
+        }
         return host >= min;
     }
 

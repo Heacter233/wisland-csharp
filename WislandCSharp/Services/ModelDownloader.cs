@@ -43,7 +43,7 @@ internal static class ModelDownloader
     /// progress 的 Bytes/Total 是"本文件"的进度，Ratio 已按本文件大小归一化。
     /// </summary>
     public static async Task DownloadFileAsync(string[] urls, string target, long expectedBytes,
-        Action<DownloadProgress>? progress, CancellationToken ct)
+        Action<DownloadProgress>? progress, CancellationToken ct, string? expectedSha256 = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(target) ?? ".");
 
@@ -72,6 +72,16 @@ internal static class ModelDownloader
 
                     if (!IsValidFile(tmp, expectedBytes, tokenFile: false))
                         throw new InvalidDataException("文件大小与预期不符，可能下载不完整");
+
+                    // 哈希校验（有清单哈希时）：镜像投毒 / 续传拼出"旧头新尾"都能在这里拦住
+                    if (!string.IsNullOrEmpty(expectedSha256))
+                    {
+                        progress?.Invoke(new DownloadProgress(1, expectedBytes, expectedBytes, "校验文件哈希…"));
+                        var actual = ModelHashes.ComputeFileSha256(tmp);
+                        if (!string.Equals(actual, expectedSha256, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException(
+                                $"文件哈希不匹配（期望 {expectedSha256[..12]}…，实际 {actual[..12]}…），已丢弃缓存");
+                    }
 
                     if (File.Exists(target)) File.Delete(target);
                     File.Move(tmp, target, overwrite: true);

@@ -230,7 +230,7 @@ public sealed class ClashPlugin : IWislandPlugin
             _status = "连接失败：" + Short(ex)
                     + $"\n已尝试 HTTP({Base}) 与命名管道(\\\\pipe\\{PipeName})。"
                     + "请确认 Clash 已开启外部控制器、端口/密钥/管道名正确。";
-            _ctx.Log.Warn($"Clash 连接失败 [transport={Transport} working={_working} pipe={PipeName}] "
+            _ctx?.Log.Warn($"Clash 连接失败 [transport={Transport} working={_working} pipe={PipeName}] "
                         + $"{ex.GetType().Name}: {ex.GetBaseException().Message}");
         }
         finally

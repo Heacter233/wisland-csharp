@@ -79,6 +79,26 @@ internal sealed class PluginHostContext : IPluginContext, IDisposable
         if (message == null) return;
         if (!Ensure(PluginPermissions.MessagesPush, "推送消息")) return;
 
+        // 强制来源 = 插件自己的 id：插件不能冒充 qq/wechat/mail（借内置磁贴与提示音），
+        // 也不能借用别的插件的 id（NotifySound 是按 Source 字符串查注册表的）。
+        var normalized = new PluginMessage
+        {
+            Source = Manifest.Id,
+            SourceName = string.IsNullOrWhiteSpace(message.SourceName) ? Manifest.Name : message.SourceName,
+            Title = message.Title,
+            Body = message.Body,
+            Time = message.Time,
+            Level = message.Level,
+            IconGlyph = message.IconGlyph,
+            IconColor = message.IconColor,
+            Kind = message.Kind,
+            Uri = message.Uri,
+            Action = message.Action,
+            NotifyDraw = message.NotifyDraw,
+            NotifyImage = message.NotifyImage,
+        };
+        message = normalized;
+
         // 插件未声明 ui.compact 时忽略自定义动画，避免"悄悄画东西"
         if (!Manifest.Has(PluginPermissions.CompactDraw))
             message = StripDraw(message);

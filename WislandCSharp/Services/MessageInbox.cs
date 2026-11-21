@@ -76,6 +76,43 @@ public sealed class MessageInbox
     private readonly object _lock = new();
     private readonly List<PluginMessage> _items = new();
 
+    /// <summary>内置来源（系统通知镜像用）：插件不得冒充它们。</summary>
+    private static readonly HashSet<string> BuiltinSources =
+        new(StringComparer.OrdinalIgnoreCase) { "qq", "wechat", "mail", "other" };
+
+    /// <summary>已加载插件注册的来源 id（由 PluginLoader 在装载/卸载时维护）。</summary>
+    private readonly HashSet<string> _pluginSources = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>注册一个"允许推送"的插件来源 id。</summary>
+    public void RegisterPluginSource(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return;
+        lock (_lock) _pluginSources.Add(id);
+    }
+
+    /// <summary>注销插件来源 id（插件卸载/重载时调用）。</summary>
+    public void UnregisterPluginSource(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return;
+        lock (_lock) _pluginSources.Remove(id);
+    }
+
+    /// <summary>该来源是否被允许（内置来源或已加载插件）。</summary>
+    public bool IsKnownSource(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return false;
+        lock (_lock)
+        {
+            return BuiltinSources.Contains(source) || _pluginSources.Contains(source);
+        }
+    }
+
+    /// <summary>
+    /// 宿主内部推送（系统通知镜像等）：跳过来源校验。
+    /// 插件不应调用它——插件走 IPluginContext.PushMessage（会强制把 Source 改成插件自己的 id）。
+    /// </summary>
+    internal void PushTrusted(PluginMessage message) => PushCore(message, notify: true, strict: false);
+
     /// <summary>最多保留多少条。</summary>
     public int Capacity { get; set; } = 50;
 
@@ -90,16 +127,27 @@ public sealed class MessageInbox
         get { lock (_lock) return _items.ToArray(); }
     }
 
-    /// <summary>推送一条消息。</summary>
-    public void Push(PluginMessage message) => Push(message, notify: true);
+    /// <summary>
+    /// 推送一条消息。
+    /// 来源必须是内置来源（qq/wechat/mail/other）或已加载插件的 id，
+    /// 否则视为伪造（例如插件谎称自己是 QQ 去借用内置来源的提示音与磁贴），直接丢弃并记日志。
+    /// </summary>
+    public void Push(PluginMessage message) => PushCore(message, notify: true, strict: true);
 
     /// <summary>快捷方法：只给标题与正文。</summary>
     public void Push(string source, string title, string body = "", string level = "info")
         => Push(new PluginMessage { Source = source, Title = title, Body = body, Level = level });
 
-    private void Push(PluginMessage message, bool notify)
+    private void PushCore(PluginMessage message, bool notify, bool strict)
     {
         if (message == null) return;
+
+        if (strict && !IsKnownSource(message.Source))
+        {
+            App.DebugNote($"inbox: 拒绝来源不明的消息 Source='{message.Source}'（伪造来源或插件未注册）");
+            return;
+        }
+
         lock (_lock)
         {
             _items.Insert(0, message);

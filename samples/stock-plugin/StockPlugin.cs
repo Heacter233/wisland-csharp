@@ -103,6 +103,8 @@ public sealed class StockPlugin : IWislandPlugin
     {
         _timer?.Dispose();
         _timer = null;
+        // 释放连接池（示例被复制到各处，泄漏会累积）
+        try { _http.Dispose(); } catch { }
         _ctx = null;
     }
 
@@ -186,7 +188,7 @@ public sealed class StockPlugin : IWislandPlugin
             {
                 await Task.WhenAll(tasks);
                 _status = codes.Count == 0
-                    ? $"仅显示大盘指数 · {DateTime.Now:HH:mm:ss}"
+                    ? $"仅显示大盘指数 · {DateTime.Now:MM-dd HH:mm:ss}"
                     : $"更新于 {DateTime.Now:HH:mm:ss} · {_quotes.Count} 只自选股";
                 _lastSuccess = DateTime.Now;
                 _lastFailAt = DateTime.MinValue;
@@ -204,7 +206,7 @@ public sealed class StockPlugin : IWislandPlugin
             _status = _quotes.Count > 0
                 ? $"更新失败（显示 {_lastSuccess:HH:mm:ss} 的数据）：{Short(ex)}"
                 : "拉取失败：" + Short(ex) + "\n接口可能对当前网络限流，稍后会自动重试。";
-            _ctx.Log.Warn("股票行情拉取失败：" + ex.Message);
+            _ctx?.Log.Warn("股票行情拉取失败：" + ex.Message);
         }
         finally
         {
@@ -358,6 +360,8 @@ public sealed class StockPlugin : IWislandPlugin
             if (_ctx == null || !File.Exists(CachePath)) return;
             var dto = JsonSerializer.Deserialize<CacheDto>(File.ReadAllText(CachePath), CacheJson);
             if (dto == null) return;
+            // 缓存过期（超过 3 天）直接丢弃：网络长期不通时不要拿一个月前的价格冒充当前值
+            if ((DateTime.Now - dto.Ts).TotalDays > 3) return;
             _quotes.Clear();
             _quotes.AddRange(dto.Quotes);
             _indices.Clear();
@@ -365,7 +369,7 @@ public sealed class StockPlugin : IWislandPlugin
             _lastSuccess = dto.Ts;
             if (_quotes.Count > 0)
             {
-                _status = $"显示 {dto.Ts:HH:mm:ss} 的缓存数据（正在刷新…）";
+                _status = $"显示 {dto.Ts:MM-dd HH:mm:ss} 的缓存数据（正在刷新…）";
                 if (_selected.Length == 0) _selected = _quotes[0].SecId;
             }
         }
@@ -876,22 +880,34 @@ public sealed class StockPlugin : IWislandPlugin
     {
         public List<double> Points = new();
 
+        /// <summary>取主题色（取不到就用兜底色），并套上指定透明度。</summary>
+        private static Color ChartColor(string key, Color fallback, byte alpha)
+        {
+            var c = Application.Current?.TryFindResource(key) is SolidColorBrush b ? b.Color : fallback;
+            return Color.FromArgb(alpha, c.R, c.G, c.B);
+        }
+
         protected override void OnRender(DrawingContext dc)
         {
             var w = ActualWidth;
             var h = ActualHeight;
             if (w < 8 || h < 8) return;
 
+            // 配色跟随主题（浅色主题下不能再写死白色系，否则整块图看不清）
+            var panel = ChartColor("AppTrack", Color.FromArgb(255, 255, 255, 255), 18);
+            var textColor = ChartColor("AppText3", Color.FromArgb(255, 160, 160, 160), 210);
+            var gridColor = ChartColor("AppText3", Color.FromArgb(255, 160, 160, 160), 70);
+
             // 背景
-            var bg = new SolidColorBrush(Color.FromArgb(18, 255, 255, 255));
-            dc.DrawRoundedRectangle(bg, null, new Rect(0, 0, w, h), 8, 8);
+            dc.DrawRoundedRectangle(new SolidColorBrush(panel), null, new Rect(0, 0, w, h), 8, 8);
 
             if (Points.Count < 2)
             {
                 var tb = new FormattedText("暂无走势数据",
                     CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-                    new Typeface(Wisland.Theme.Fonts.Ui), 11,
-                    new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)), 1.0);
+                    new Typeface(new FontFamily("Segoe UI, Microsoft YaHei UI"), FontStyles.Normal,
+                        FontWeights.Normal, FontStretches.Normal), 11,
+                    new SolidColorBrush(textColor), 1.0);
                 dc.DrawText(tb, new Point(10, h / 2 - tb.Height / 2));
                 return;
             }
@@ -908,7 +924,7 @@ public sealed class StockPlugin : IWislandPlugin
 
             // 首值基准虚线
             var baseY = Y(Points[0]);
-            var basePen = new Pen(new SolidColorBrush(Color.FromArgb(70, 255, 255, 255)), 1)
+            var basePen = new Pen(new SolidColorBrush(gridColor), 1)
             {
                 DashStyle = new DashStyle(new double[] { 3, 3 }, 0),
             };

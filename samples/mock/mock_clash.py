@@ -31,6 +31,11 @@ STATE = {
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, obj, code=200):
+        # 204 No Content 按 RFC 不能带响应体（Clash 客户端对此敏感，带 body 会让部分实现报解析错误）
+        if code == 204:
+            self.send_response(204)
+            self.end_headers()
+            return
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")

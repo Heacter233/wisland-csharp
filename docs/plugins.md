@@ -42,7 +42,7 @@
 - 插件目录里**只放自己的程序集与资源**，不要复制 `Wisland.exe`、`System.*.dll`、
   `Microsoft.*.dll`、`WinRT.Runtime.dll` 等宿主已有的依赖（宿主会从默认上下文解析）。
 - 插件自己的第三方依赖（如 `Newtonsoft.Json.dll`）放在插件目录即可，加载器会从插件目录解析。
-- 修改插件后**需要重启宿主**（热重载未实现）。
+- 修改插件后**默认会自动热重载**（`plugins.hot_reload`，见 §5.1）；关掉热重载时才需要重启宿主。
 
 ---
 
@@ -435,6 +435,9 @@ clash-1.0.0.zip
 | [`hello-plugin`](../samples/hello-plugin) | 最小骨架：清单 / 设置面板 / 插件页 / 消息推送 / 宿主定时器 |
 | [`stock-plugin`](../samples/stock-plugin) | 定时网络拉取、磁盘缓存、涨跌提醒、`OnRender` 自绘走势图、列表增删 |
 | [`clash-plugin`](../samples/clash-plugin) | 只访问本机、**HTTP 与命名管道双通道**、分段控件、可点击标签 |
+| [`ff14-recruit-plugin`](../samples/ff14-recruit-plugin) | 轮换搜索 + 快照差分去重 + 屏蔽规则 + 自定义搜索页 |
+| [`ff14-price-plugin`](../samples/ff14-price-plugin) | 离线大词典加载、第三方行情查询、汇总/明细双表、筛选 |
+| [`ff14-treasure-plugin`](../samples/ff14-treasure-plugin) | 连接本机 WebSocket（ACT OverlayServer）、自绘图案通知 |
 | [`mock`](../samples/mock) | 没有 Clash 时验证插件：HTTP mock + 命名管道 mock |
 
 以 `hello-plugin` 为例，构建并安装：

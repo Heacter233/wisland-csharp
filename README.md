@@ -112,6 +112,12 @@ WASAPI 回环/麦克风 → 人声处理（DPDFNet2 / GTCRN / VoxLock）→ 电�
 
 ## 插件开发
 
+> ⚠️ **只安装可信插件**：插件与宿主**同进程**运行，权限是"清单声明 + 宿主守门"
+> （`ctx.PushMessage` / `RegisterSettingsSection` / `RegisterPage` 三个入口会被检查，
+> 未声明即拒绝并记日志），**不是沙箱**。装插件就等于信任它的作者——
+> 它能读写本机文件、访问网络（是否用到这类能力会在设置页的权限列表里显示）。
+> 进程隔离、首次加载权限确认在路线图中。
+
 插件放在 `plugins/<id>/`（`plugin.json` + 程序集），宿主启动时校验清单、按插件隔离加载，
 并在设置页展示状态、权限与插件自带的设置面板。
 
@@ -423,6 +429,12 @@ WASAPI 回环   →   DPDFNet2/GTCRN 降噪    →   -22dBFS       →   自适�
 | `live.audio.device` | 麦克风设备序号（`-1` = 系统默认） |
 | `live.vad.threshold` / `silence_ms` / `min_speech_ms` / `max_segment_ms` | 切句参数：能量阈值（0.012）/ 静音判句（450ms）/ 最短语音（300ms）/ 单句上限（6000ms） |
 | `live.translate.enabled` / `target` | 是否翻译字幕、目标语言（默认 `zh-CN`） |
+
+> **配置文件的备份与恢复**：`config.json` 采用原子写（临时文件 + 替换），
+> 每次成功落盘都会保留上一版为 `config.json.bak`。
+> 如果启动时发现配置损坏，会把坏文件改名保留为 `config.json.corrupt-<时间戳>`，
+> 尽力从 `.bak` 恢复，并在设置页顶部显示提示条（含备份路径与「打开配置目录」按钮）。
+> 配置目录不可写（例如装在 `Program Files`）时同样会在设置页提示"设置无法保存"。
 
 ## 已知问题
 

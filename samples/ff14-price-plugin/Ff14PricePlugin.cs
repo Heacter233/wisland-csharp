@@ -479,7 +479,7 @@ public sealed class Ff14PricePlugin : IWislandPlugin
         catch (Exception ex)
         {
             SetStatus("查询失败：" + ex.Message);
-            _ctx.Log.Warn("价格查询失败：" + ex.Message);
+            _ctx?.Log.Warn("价格查询失败：" + ex.Message);
         }
         finally
         {

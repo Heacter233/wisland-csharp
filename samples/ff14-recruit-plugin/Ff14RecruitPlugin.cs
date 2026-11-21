@@ -612,7 +612,7 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
             _lastError = ex.Message;
             _lastCheckAt = DateTime.Now;
             SetStatus("检查失败：" + ex.Message);
-            _ctx.Log.Warn("检查招募失败：" + ex.Message);
+            _ctx?.Log.Warn("检查招募失败：" + ex.Message);
         }
         finally
         {
@@ -1183,7 +1183,7 @@ public sealed class Ff14RecruitPlugin : IWislandPlugin
         catch (Exception ex)
         {
             if (_searchStatus != null) _searchStatus.Text = "搜索失败：" + ex.Message;
-            _ctx.Log.Warn("搜索失败：" + ex.Message);
+            _ctx?.Log.Warn("搜索失败：" + ex.Message);
         }
         finally
         {

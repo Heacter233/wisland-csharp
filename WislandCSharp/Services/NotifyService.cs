@@ -402,7 +402,7 @@ public sealed class NotifyService : IDisposable
         {
             if (!_config.Get("island.notify_to_inbox", true)) return;
             var (name, glyph, color) = KindInfo(item.Kind);
-            ServiceHub.Inbox.Push(new PluginMessage
+            ServiceHub.Inbox.PushTrusted(new PluginMessage
             {
                 Source = item.Kind,
                 SourceName = string.IsNullOrWhiteSpace(item.Name) ? name : item.Name,

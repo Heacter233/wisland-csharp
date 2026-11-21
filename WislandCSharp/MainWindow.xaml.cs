@@ -1150,7 +1150,7 @@ public partial class MainWindow : Window
         {
             if (!Array.Exists(Environment.GetCommandLineArgs(),
                     a => string.Equals(a, "--inbox-demo", StringComparison.OrdinalIgnoreCase))) return;
-            ServiceHub.Inbox.Push(new Services.PluginMessage
+            ServiceHub.Inbox.PushTrusted(new Services.PluginMessage
             {
                 Source = "clash",
                 SourceName = "Clash",
@@ -1160,7 +1160,7 @@ public partial class MainWindow : Window
                 IconGlyph = "\uE774",   // Globe
                 IconColor = "#E8544E",
             });
-            ServiceHub.Inbox.Push(new Services.PluginMessage
+            ServiceHub.Inbox.PushTrusted(new Services.PluginMessage
             {
                 Source = "bilibili",
                 SourceName = "哔哩哔哩",
@@ -1188,7 +1188,7 @@ public partial class MainWindow : Window
             // 演示"同时多条"与"图片通知"
             for (var i = 1; i <= 3; i++)
             {
-                ServiceHub.Inbox.Push(new Services.PluginMessage
+                ServiceHub.Inbox.PushTrusted(new Services.PluginMessage
                 {
                     Source = "burst",
                     SourceName = "批量通知",
@@ -1212,7 +1212,7 @@ public partial class MainWindow : Window
             };
             foreach (var (src, name, glyph, color) in demo)
             {
-                ServiceHub.Inbox.Push(new Services.PluginMessage
+                ServiceHub.Inbox.PushTrusted(new Services.PluginMessage
                 {
                     Source = src,
                     SourceName = name,
@@ -1229,7 +1229,7 @@ public partial class MainWindow : Window
                 Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "FF14DJJ.jpg");
             if (System.IO.File.Exists(demoImg))
             {
-                ServiceHub.Inbox.Push(new Services.PluginMessage
+                ServiceHub.Inbox.PushTrusted(new Services.PluginMessage
                 {
                     Source = "pic",
                     SourceName = "图片通知",

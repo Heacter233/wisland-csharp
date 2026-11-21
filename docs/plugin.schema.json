@@ -50,6 +50,7 @@
           "clipboard.read",
           "files.user",
           "notify.image",
+          "notify.sound",
           "system.info"
         ]
       },

@@ -167,7 +167,15 @@ public sealed class AsrModelStore
                 continue;
             }
 
-            await ModelDownloader.DownloadFileAsync(file.Urls, path, file.SizeBytes, onFile, ct);
+            // 尽力取清单哈希（HuggingFace LFS 的 sha256）；取不到就只做体积校验
+            string? sha = null;
+            try { sha = await ModelHashes.ResolveAsync(file.Urls[0], ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { App.DebugNote($"asr: 取哈希失败 {file.LocalPath}：{ex.Message}"); }
+            if (sha == null) App.DebugNote($"asr: {file.LocalPath} 未取到 SHA256，仅按体积校验");
+
+            await ModelDownloader.DownloadFileAsync(file.Urls, path, file.SizeBytes, onFile, ct, sha)
+                .ConfigureAwait(false);
             doneBefore += file.SizeBytes;
         }
 
