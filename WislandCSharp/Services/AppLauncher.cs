@@ -383,11 +383,7 @@ public static class AppLauncher
 
     private static void Log(string kind, string stage, string detail)
     {
-        try
-        {
-            var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{kind}] {stage} {detail}{Environment.NewLine}";
-            File.AppendAllText(Path.Combine(AppPaths.DataDir, "app-launch.log"), line, Encoding.UTF8);
-        }
-        catch { }
+        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{kind}] {stage} {detail}{Environment.NewLine}";
+        RotatingLog.Append(Path.Combine(AppPaths.DataDir, "app-launch.log"), line, Encoding.UTF8);
     }
 }

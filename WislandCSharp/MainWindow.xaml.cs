@@ -2249,27 +2249,7 @@ public partial class MainWindow : Window
         catch { }
     }
 
-    private static (uint Mod, uint Vk) ParseHotkey(string s)
-    {
-        var parts = s.Split('+').Select(p => p.Trim().ToLowerInvariant()).ToArray();
-        uint mod = 0, vk = 0;
-        foreach (var p in parts)
-        {
-            switch (p)
-            {
-                case "ctrl": case "control": mod |= 0x0002; break;
-                case "alt": mod |= 0x0001; break;
-                case "shift": mod |= 0x0004; break;
-                case "win": mod |= 0x0008; break;
-                case "space": vk = 0x20; break;
-                default:
-                    if (p.Length == 1 && char.IsLetterOrDigit(p[0])) vk = (uint)char.ToUpperInvariant(p[0]);
-                    else if (p.StartsWith('f') && int.TryParse(p[1..], out var n)) vk = (uint)(0x70 + n - 1);
-                    break;
-            }
-        }
-        return (mod, vk);
-    }
+    private static (uint Mod, uint Vk) ParseHotkey(string s) => Services.HotkeyService.ParseHotkey(s);
 
     // ---------------- 毛玻璃调试开关（--glass-debug） ----------------
 

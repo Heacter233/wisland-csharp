@@ -102,6 +102,38 @@ public class HotkeyService : IHotkeyService
         return false;
     }
 
+    /// <summary>
+    /// 解析 "Ctrl+Alt+W" / "Shift+F5" 这类配置字符串，返回 (修饰键, 虚拟键码)。
+    /// 从 MainWindow 挪到服务里，纯逻辑，便于单测。
+    /// </summary>
+    public static (uint Mod, uint Vk) ParseHotkey(string s)
+    {
+        var parts = (s ?? "").Split('+');
+        uint mod = 0, vk = 0;
+        foreach (var raw in parts)
+        {
+            var p = raw.Trim().ToLowerInvariant();
+            switch (p)
+            {
+                case "ctrl": case "control": mod |= 0x0002; break;
+                case "alt": mod |= 0x0001; break;
+                case "shift": mod |= 0x0004; break;
+                case "win": case "windows": mod |= 0x0008; break;
+                case "space": vk = 0x20; break;
+                case "esc": case "escape": vk = 0x1B; break;
+                case "enter": case "return": vk = 0x0D; break;
+                case "tab": vk = 0x09; break;
+                default:
+                    if (p.Length == 1 && char.IsLetterOrDigit(p[0])) vk = (uint)char.ToUpperInvariant(p[0]);
+                    else if (p.Length is 2 or 3 && p[0] == 'f' && int.TryParse(p[1..], out var n)
+                             && n is >= 1 and <= 24)
+                        vk = (uint)(0x70 + n - 1);
+                    break;
+            }
+        }
+        return (mod, vk);
+    }
+
     /// <summary>最近一次注册失败的原因（null = 没有失败）；设置页/主窗口据此提示。</summary>
     public string? LastError { get; private set; }
 

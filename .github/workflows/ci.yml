@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: 还原依赖
+        run: dotnet restore Wisland.sln
+
+      - name: 构建（宿主 + 示例 + 测试）
+        run: dotnet build Wisland.sln -c Release --no-restore
+
+      - name: 运行单元测试
+        run: dotnet test Tests\Wisland.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"
+
+      - name: 上传测试结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: Tests/TestResults/**/*.trx
+          if-no-files-found: ignore

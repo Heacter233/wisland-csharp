@@ -1,0 +1,49 @@
+# Wisland 代码风格约定（编辑器与 dotnet format 都会读这个文件）
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+tab_width = 4
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[*.cs]
+# 命名空间/括号风格
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+
+# 允许单行 if 不带花括号（仓内既有风格），但禁止多行省略
+csharp_prefer_braces = false:suggestion
+
+# var 使用：类型明显时优先 var
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = false:suggestion
+
+# using 排序（.NET SDK 自带 analyzers 的 IDE0005 等）
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+
+# 空行/字段
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+
+# 分析器级别：默认 suggestion，避免一开就淹没在 warning 里
+dotnet_diagnostic.CA1031.severity = none   # 宽泛 catch（本仓大量用于可选设备探测）
+dotnet_diagnostic.CA1062.severity = none   # 参数空校验（已用 nullable 表达）
+dotnet_diagnostic.CA1303.severity = none   # 硬编码字符串（中文文案很多）
+dotnet_diagnostic.CA2007.severity = none   # ConfigureAwait（服务层已个别处理）
+dotnet_diagnostic.IDE0060.severity = none  # 未用参数（契约/占位实现需要）
+
+# 关键规则保持开启
+dotnet_diagnostic.CA2201.severity = warning  # 不要抛非 Exception 类型
+dotnet_diagnostic.CA2016.severity = warning  # CancellationToken 要传递下去

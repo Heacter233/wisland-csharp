@@ -22,6 +22,9 @@
     <Version>0.2.1</Version>
     <!-- 本机仅安装 .NET 10 运行时：允许 net8.0 应用滚动到更高版本运行 -->
     <RollForward>Major</RollForward>
+    <!-- 基础分析器（不把警告当错误，避免旧代码一次性全红） -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
   </PropertyGroup>
 
   <ItemGroup>

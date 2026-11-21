@@ -461,16 +461,26 @@ WASAPI 回环   →   DPDFNet2/GTCRN 降噪    →   -22dBFS       →   自适�
 12. **源站不支持 Range 时会从头下载**（少见）：响应是 200 而不是 206 时 `.part` 会被覆盖重写，
     进度会短暂回退到 0% 再往前，属于正常降级。
 
-## 构建
+## 构建与测试
 
 需要 **.NET 8 SDK**，Windows 10 1809+ / Windows 11。
 
 ```bash
-cd WislandCSharp
-dotnet build -c Debug
+dotnet build Wisland.sln          # 整个解决方案：宿主 + 6 个示例插件 + 测试
+dotnet build WislandCSharp/Wisland.csproj -c Debug   # 只构建宿主
 ```
 
 产物在 `WislandCSharp\bin\Debug\net8.0-windows10.0.19041.0\Wisland.exe`。
+
+单元测试（xUnit，覆盖配置合并/迁移/损坏恢复、插件清单校验、热键解析、LRC 解析、模型文件校验）：
+
+```bash
+dotnet test Tests/Wisland.Tests.csproj
+```
+
+- CI：`.github/workflows/ci.yml`（windows-latest：还原 → 构建整个解决方案 → 跑测试）
+- 分析器：宿主工程开了 `EnableNETAnalyzers` + `latest-recommended`，规则级别在 `.editorconfig` 里逐条调整
+  （默认只报 suggestion/warning，不阻断构建）
 
 发布（与 Releases 一致）：
 
@@ -499,6 +509,10 @@ dotnet publish WislandCSharp\Wisland.csproj -c Release -r win-x64 --self-contain
 ## 目录结构
 
 ```
+Wisland.sln                  解决方案：宿主 + 示例插件 + 测试
+Tests/                       单元测试（xUnit）
+.github/workflows/ci.yml      GitHub Actions：构建 + 测试
+.editorconfig                代码风格与分析器规则
 WislandCSharp/
 ├─ MainWindow.xaml(.cs)      主窗口：玻璃/窗口几何/展开收起/插件页行/拖放/热键
 ├─ Controls/

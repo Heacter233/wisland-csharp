@@ -184,7 +184,7 @@ public partial class App : Application
             var dir = AppPaths.DataDir;
             Directory.CreateDirectory(dir);
             // 注意用 "\r\n" 转义；早期写成 `r`n（反引号），日志被写成字面量且全程一行。
-            File.AppendAllText(Path.Combine(dir, "debug.log"),
+            Services.RotatingLog.Append(Path.Combine(dir, "debug.log"),
                 $"[{DateTime.Now:HH:mm:ss.fff}] {note}\r\n", Encoding.UTF8);
         }
         catch { }
@@ -200,7 +200,7 @@ public partial class App : Application
             sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {where}");
             sb.AppendLine(ex?.ToString() ?? "(no exception object)");
             sb.AppendLine(new string('-', 60));
-            File.AppendAllText(Path.Combine(dir, "crash.log"), sb.ToString(), Encoding.UTF8);
+            Services.RotatingLog.Append(Path.Combine(dir, "crash.log"), sb.ToString(), Encoding.UTF8);
         }
         catch { }
     }
