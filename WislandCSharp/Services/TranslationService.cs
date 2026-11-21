@@ -237,11 +237,12 @@ public class TranslationService : ITranslationService, IDisposable
             lock (_lock) snapshot = _history.ToList();
             var dir = System.IO.Path.GetDirectoryName(_historyPath);
             if (!string.IsNullOrEmpty(dir)) System.IO.Directory.CreateDirectory(dir);
-            System.IO.File.WriteAllText(_historyPath,
-                System.Text.Json.JsonSerializer.Serialize(snapshot,
-                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            var json = System.Text.Json.JsonSerializer.Serialize(snapshot,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            if (!AtomicFile.WriteAllText(_historyPath, json, out var error))
+                App.DebugNote("translate-history: 保存失败 " + error);
         }
-        catch { }
+        catch (Exception ex) { App.DebugNote("translate-history: 保存异常 " + ex.Message); }
     }
 
     public void Dispose()

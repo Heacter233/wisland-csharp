@@ -345,8 +345,11 @@ public class ClipboardService : IClipboardService, IDisposable
             string json;
             lock (_lock)
                 json = JsonSerializer.Serialize(_history, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_storePath, json);
+
+            // 原子写：剪贴板历史也是"一坏就全丢"，且写入频率高的多（每次复制）
+            if (!AtomicFile.WriteAllText(_storePath, json, out var error))
+                App.DebugNote("clipboard: 保存失败 " + error);
         }
-        catch { }
+        catch (Exception ex) { App.DebugNote("clipboard: 保存异常 " + ex.Message); }
     }
 }

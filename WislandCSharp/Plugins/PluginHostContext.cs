@@ -267,9 +267,15 @@ internal sealed class PluginConfigStore : IPluginConfig, IDisposable
 
             System.IO.Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var json = JsonSerializer.Serialize(copy, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_path, json, Encoding.UTF8);
+
+            // 原子写：插件配置被写坏的后果与主配置一样（默认值回写覆盖原内容）
+            if (!Services.AtomicFile.WriteAllText(_path, json, out var error))
+                App.DebugNote($"plugin-config[{Path.GetFileName(Path.GetDirectoryName(_path))}]: 保存失败 {error}");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            App.DebugNote($"plugin-config[{Path.GetFileName(Path.GetDirectoryName(_path))}]: 保存异常 {ex.Message}");
+        }
     }
 
     public void Dispose() => Save();

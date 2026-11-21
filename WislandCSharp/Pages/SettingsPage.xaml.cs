@@ -60,6 +60,10 @@ public partial class SettingsPage : UserControl
         // 纯色底板已移除：设置页直接透出玻璃/背景
         Host.Background = null;
 
+        // 配置损坏 / 目录不可写：在页面顶部给出可见提示（此前完全静默）
+        if (cfg.LastLoadError is { Length: > 0 } || cfg.LastSaveError is { Length: > 0 })
+            SectionStack.Children.Add(BuildStorageWarning(cfg));
+
         // ===== 基础设置 =====
         var basic = AddSection("基础设置", "外观、交互与开机行为");
 
@@ -671,6 +675,68 @@ public partial class SettingsPage : UserControl
 
     private static void AddCard(Panel host, Border card) => host.Children.Add(card);
 
+    /// <summary>
+    /// 存储异常提示条：配置读到损坏（已隔离并尽力从 .bak 恢复）或保存失败（目录不可写）。
+    /// 以前这两种情况完全静默——用户只会看到"设置没保存""Key 没了"而不知道原因。
+    /// </summary>
+    private Border BuildStorageWarning(IConfigService cfg)
+    {
+        var body = new StackPanel { Margin = new Thickness(12, 10, 12, 10) };
+
+        body.Children.Add(new TextBlock
+        {
+            Text = "⚠ 配置文件异常",
+            FontSize = 12.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x3A)),
+            FontFamily = new FontFamily(Wisland.Theme.Fonts.Ui),
+        });
+
+        void Line(string text)
+        {
+            body.Children.Add(new TextBlock
+            {
+                Text = text,
+                FontSize = 10.5,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0),
+                Foreground = new SolidColorBrush(Themes.Text2()),
+                FontFamily = new FontFamily(Wisland.Theme.Fonts.Ui),
+            });
+        }
+
+        if (cfg.LastLoadError is { Length: > 0 } load) Line(load);
+        if (cfg.LastSaveError is { Length: > 0 } save) Line(save);
+        if (cfg.CorruptBackupPath is { Length: > 0 } corrupt)
+            Line("损坏的原文件已保留：" + corrupt + "（可手动检查/发给开发者定位问题）");
+        Line("配置文件位置：" + cfg.ConfigPath);
+
+        var open = new Button
+        {
+            Content = "打开配置目录",
+            Height = 26,
+            Padding = new Thickness(12, 0, 12, 0),
+            FontSize = 11.5,
+            Margin = new Thickness(0, 8, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            FocusVisualStyle = null,
+            Cursor = Cursors.Hand,
+        };
+        open.SetResourceReference(FrameworkElement.StyleProperty, "PillBtn");
+        open.Click += (_, _) => TryOpen(Path.GetDirectoryName(cfg.ConfigPath) ?? AppPaths.DataDir);
+        body.Children.Add(open);
+
+        return new Border
+        {
+            Width = 592,
+            Margin = new Thickness(0, 0, 0, 4),
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(12),
+            Background = new SolidColorBrush(Color.FromArgb(28, 0xFF, 0x45, 0x3A)),
+            Child = body,
+        };
+    }
+
     /// <summary>只读信息卡（用于未实现项/状态说明）。</summary>
     private Border InfoCard(string title, string desc)
     {
@@ -1026,10 +1092,20 @@ public partial class SettingsPage : UserControl
         if (!_dirty) return;
         var cfg = ServiceHub.Config;
         foreach (var (key, value) in _pending) Apply(key, value, cfg);
+
+        // 一次落盘 + 一次广播（Apply 内部不再逐个 Save）
         cfg.Save();
+        cfg.NotifyChanged();
+
         _pending.Clear();
         _dirty = false;
-        HintText.Text = "已保存";
+
+        // 保存失败要明说：此前空 catch 吞掉失败，表现为"设置永远不保存"且用户不知原因
+        var failed = cfg.LastSaveError is { Length: > 0 };
+        HintText.Text = failed ? "⚠ " + cfg.LastSaveError : "已保存";
+        HintText.Foreground = failed
+            ? new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x3A))   // 系统红：主题里没有单独警告色
+            : new SolidColorBrush(Themes.Text3());
     }
 
     /// <summary>试听提示音（不受总开关与冷却限制，用于确认系统提示音/自定义 wav 可用）。</summary>
@@ -1166,10 +1242,15 @@ public partial class SettingsPage : UserControl
 
     private void Apply(string key, string value, IConfigService cfg)
     {
+        // 只改内存：Save() 与 Changed 由 Flush 统一做一次。
+        // 之前每个键都走 cfg.Set(默认 save:true) → 10 个待写项就 11 次全量序列化写盘
+        // + 11 次 Changed 广播（滑块一拖就是十几次 fsync）。
+        void W<T>(string k, T v) => cfg.Set(k, v, save: false, notify: false);
+
         // 按来源的提示音开关：notify.sound.source.<source>（插件来源的键默认不存在）
         if (key.StartsWith("notify.sound.source.", StringComparison.Ordinal))
         {
-            cfg.Set(key, value == "true");
+            W(key, value == "true");
             return;
         }
 
@@ -1177,24 +1258,24 @@ public partial class SettingsPage : UserControl
         {
             case "island.notify_style":
             case "island.notify_plugin_anim":
-                cfg.Set(key, value);
+                W(key, value);
                 break;
 
             case "island.notify_duration_ms":
-                cfg.Set<int>(key, int.TryParse(value, out var dur) ? dur : 4000);
+                W<int>(key, int.TryParse(value, out var dur) ? dur : 4000);
                 break;
 
             case "island.notify_to_inbox":
-                cfg.Set(key, value == "true");
+                W(key, value == "true");
                 break;
 
             case "island.glass":
-                cfg.Set(key, value);
+                W(key, value);
                 ServiceHub.RequestGlass?.Invoke();
                 break;
 
             case "island.theme":
-                cfg.Set(key, value);
+                W(key, value);
                 Themes.Mode = value;
                 ThemeApplier.Apply(Application.Current.Resources);
                 ServiceHub.RaiseThemeChanged();
@@ -1202,36 +1283,36 @@ public partial class SettingsPage : UserControl
                 break;
 
             case "island.pinned":
-                cfg.Set(key, value == "true");
+                W(key, value == "true");
                 break;
 
             case "island.passthrough":
-                cfg.Set(key, value == "true");
+                W(key, value == "true");
                 ServiceHub.RequestPassthrough?.Invoke(value == "true");
                 break;
 
             case "island.autostart":
-                cfg.Set(key, value == "true");
+                W(key, value == "true");
                 ServiceHub.RequestAutostart?.Invoke(value == "true");
                 break;
 
             case "island.edge":
-                cfg.Set<string>(key, value);
+                W<string>(key, value);
                 ServiceHub.RequestReanchor?.Invoke();
                 break;
 
             case "island.pos":
-                cfg.Set<double>(key, double.TryParse(value, out var pos) ? pos : 0.5);
+                W<double>(key, double.TryParse(value, out var pos) ? pos : 0.5);
                 ServiceHub.RequestReanchor?.Invoke();
                 break;
 
             case "island.compact_view":
-                cfg.Set(key, value);
+                W(key, value);
                 ServiceHub.RequestCompactView?.Invoke(value);
                 break;
 
             case "island.expand_mode":
-                cfg.Set(key, value);
+                W(key, value);
                 if (value == "always") ServiceHub.RequestExpand?.Invoke("");
                 else if (value == "never") ServiceHub.RequestCollapse?.Invoke();
                 break;
@@ -1239,36 +1320,36 @@ public partial class SettingsPage : UserControl
             case "hotkeys.toggle":
             case "hotkeys.translate":
             case "hotkeys.clipboard":
-                cfg.Set(key, value);
+                W(key, value);
                 ServiceHub.RequestReloadHotkeys?.Invoke();
                 break;
 
             case "island.hover_delay_ms":
             case "island.collapse_delay_ms":
-                cfg.Set<int>(key, int.TryParse(value, out var ms) ? ms : 0);
+                W<int>(key, int.TryParse(value, out var ms) ? ms : 0);
                 ServiceHub.RequestTimings?.Invoke();
                 break;
 
             case "live.collapsed_hold_s":
-                cfg.Set<double>(key, double.TryParse(value, out var holdS) ? Math.Clamp(holdS, 0, 60) : 0.0);
+                W<double>(key, double.TryParse(value, out var holdS) ? Math.Clamp(holdS, 0, 60) : 0.0);
                 break;
 
             case "live.vad.silence_ms":
-                cfg.Set<int>(key, Math.Clamp(int.TryParse(value, out var silenceMs) ? silenceMs : 450, 150, 1500));
+                W<int>(key, Math.Clamp(int.TryParse(value, out var silenceMs) ? silenceMs : 450, 150, 1500));
                 break;
 
             case "live.vad.max_segment_ms":
-                cfg.Set<int>(key, Math.Clamp(int.TryParse(value, out var segmentMs) ? segmentMs : 12000, 2000, 20000));
+                W<int>(key, Math.Clamp(int.TryParse(value, out var segmentMs) ? segmentMs : 12000, 2000, 20000));
                 break;
 
             case "weather.interval_min":
-                cfg.Set(key, int.Parse(value));
+                W<int>(key, int.TryParse(value, out var intervalMin) ? intervalMin : 15);
                 break;
 
             case "weather.city":
-                cfg.Set(key, value);
-                cfg.Set("weather.lat", 0.0);
-                cfg.Set("weather.lon", 0.0);
+                W(key, value);
+                W<double>("weather.lat", 0.0);
+                W<double>("weather.lon", 0.0);
                 ServiceHub.Weather.Initialize(city: value,
                     apiKey: cfg.Get("weather.api_key", ""),
                     units: cfg.Get("weather.units", "metric"),
@@ -1280,17 +1361,17 @@ public partial class SettingsPage : UserControl
             case Services.ClipboardService.MaxItemsKey:
                 // 键名与服务统一（此前写 max_items、读 max，导致设置完全无效）
                 var maxItems = Math.Clamp(int.TryParse(value, out var mi) ? mi : 20, 1, 200);
-                cfg.Set(key, maxItems);
-                ServiceHub.Clipboard.MaxItems = maxItems;   // 立即裁剪并落盘
+                W(key, maxItems);
+                ServiceHub.Clipboard.MaxItems = maxItems;   // 立即裁剪（会自己落盘一次剪贴板历史）
                 break;
 
             default:
                 // 其余按原类型写回
                 var old = cfg.Get<object?>(key, null);
-                if (old is bool) cfg.Set<bool>(key, value == "true");
-                else if (old is long or int) cfg.Set<int>(key, int.TryParse(value, out var i) ? i : 0);
-                else if (old is double) cfg.Set<double>(key, double.TryParse(value, out var d) ? d : 0.0);
-                else cfg.Set<string>(key, value);
+                if (old is bool) W<bool>(key, value == "true");
+                else if (old is long or int) W<int>(key, int.TryParse(value, out var i) ? i : 0);
+                else if (old is double) W<double>(key, double.TryParse(value, out var d) ? d : 0.0);
+                else W<string>(key, value);
                 break;
         }
     }

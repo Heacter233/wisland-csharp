@@ -13,11 +13,31 @@ namespace Wisland.Services;
 public interface IConfigService
 {
     T? Get<T>(string key, T? defaultValue = default);
-    void Set<T>(string key, T value, bool save = true);
+
+    /// <summary>
+    /// 写入一个键。批量写（如设置页一次落盘多项）时用 save:false / notify:false，
+    /// 最后由调用方统一 Save() + NotifyChanged()，避免每次 Set 都全量序列化写盘。
+    /// </summary>
+    void Set<T>(string key, T value, bool save = true, bool notify = true);
+
     void Save();
+
+    /// <summary>手动触发一次 Changed（批量写入结束后用）。</summary>
+    void NotifyChanged();
+
     void Reload();
     string ConfigPath { get; }
     string DataDir { get; }
+
+    /// <summary>最近一次落盘失败原因（null = 正常）；设置页据此给出"设置没保存"的可见提示。</summary>
+    string? LastSaveError { get; }
+
+    /// <summary>最近一次读取失败的说明（配置损坏已被隔离时会有值）。</summary>
+    string? LastLoadError { get; }
+
+    /// <summary>配置损坏时被改名保留的文件路径（供设置页提示用户去取回）。</summary>
+    string? CorruptBackupPath { get; }
+
     event EventHandler? Changed;
 
     /// <summary>读取启动器列表（config.json → launcher[]）。</summary>
@@ -138,6 +158,10 @@ public class ConfigService : IConfigService
 
     public string ConfigPath => _configPath;
     public string DataDir => _dataDir;
+    public string? LastSaveError { get; private set; }
+    public string? LastLoadError { get; private set; }
+    public string? CorruptBackupPath { get; private set; }
+
     public event EventHandler? Changed;
 
     public ConfigService(string? configPath = null, string? dataDir = null)
@@ -160,6 +184,13 @@ public class ConfigService : IConfigService
         MigrateHoverDelayKey();
         MigrateLiveVadDefaults();
         MigrateEnhanceDefaults();
+
+        // 目录不可写时提前记录：否则用户改设置在 Save() 里静默失败，误以为"程序坏了"
+        if (!AtomicFile.IsDirectoryWritable(Path.GetDirectoryName(_configPath) ?? _dataDir))
+        {
+            LastSaveError = "程序目录不可写（可能装在 Program Files），设置无法保存。" +
+                            "请把 wisland 放到有写权限的目录。";
+        }
     }
 
     /// <summary>
@@ -296,15 +327,35 @@ public class ConfigService : IConfigService
     private void LoadFromDisk()
     {
         var merged = DeepClone(Defaults);
-        if (File.Exists(_configPath))
+        if (!File.Exists(_configPath)) { lock (_lock) _values = merged; return; }
+
+        try
         {
-            try
-            {
-                using var doc = JsonDocument.Parse(File.ReadAllText(_configPath));
-                MergeInto(merged, ToObject(doc.RootElement) as Dictionary<string, object?> ?? new());
-            }
-            catch { /* 配置损坏则只使用默认值 */ }
+            using var doc = JsonDocument.Parse(File.ReadAllText(_configPath));
+            MergeInto(merged, ToObject(doc.RootElement) as Dictionary<string, object?> ?? new());
         }
+        catch (Exception ex)
+        {
+            // 配置损坏：绝不能"静默回落默认值然后被下一次 Save 覆盖"——那等于
+            // 把用户全部设置（含 API Key）永久抹掉。这里改名保留，并尝试用 .bak 恢复。
+            var (quarantine, restored) = AtomicFile.Quarantine(_configPath);
+            CorruptBackupPath = quarantine;
+            LastLoadError = restored
+                ? $"配置文件损坏，已从备份恢复（损坏文件另存为 {Path.GetFileName(quarantine)}）"
+                : $"配置文件损坏，已改用默认设置（损坏文件另存为 {Path.GetFileName(quarantine ?? "（改名失败）")}）";
+            App.LogCrash("ConfigService.LoadFromDisk(损坏)", ex);
+
+            if (restored)
+            {
+                try
+                {
+                    using var doc2 = JsonDocument.Parse(File.ReadAllText(_configPath));
+                    MergeInto(merged, ToObject(doc2.RootElement) as Dictionary<string, object?> ?? new());
+                }
+                catch (Exception ex2) { App.LogCrash("ConfigService.LoadFromDisk(备份也损坏)", ex2); }
+            }
+        }
+
         lock (_lock) _values = merged;
     }
 
@@ -330,7 +381,7 @@ public class ConfigService : IConfigService
         }
     }
 
-    public void Set<T>(string key, T value, bool save = true)
+    public void Set<T>(string key, T value, bool save = true, bool notify = true)
     {
         if (value is null) return;
         lock (_lock)
@@ -349,8 +400,10 @@ public class ConfigService : IConfigService
             node[parts[^1]] = value;
         }
         if (save) Save();
-        Changed?.Invoke(this, EventArgs.Empty);
+        if (notify) Changed?.Invoke(this, EventArgs.Empty);
     }
+
+    public void NotifyChanged() => Changed?.Invoke(this, EventArgs.Empty);
 
     public void Save()
     {
@@ -359,9 +412,24 @@ public class ConfigService : IConfigService
             Dictionary<string, object?> snapshot;
             lock (_lock) snapshot = DeepClone(_values);
             var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_configPath, json);
+
+            // 原子写：临时文件 + File.Replace（保留 .bak）。
+            // 失败不再静默：记录 LastSaveError，设置页会显示出来。
+            if (!AtomicFile.WriteAllText(_configPath, json, out var error))
+            {
+                LastSaveError = "配置保存失败：" + (error ?? "未知错误");
+                App.DebugNote("config: " + LastSaveError);
+            }
+            else
+            {
+                LastSaveError = null;
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LastSaveError = "配置保存失败：" + ex.Message;
+            App.LogCrash("ConfigService.Save", ex);
+        }
     }
 
     public void Reload()

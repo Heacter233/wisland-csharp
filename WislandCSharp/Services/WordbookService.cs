@@ -148,8 +148,9 @@ public sealed class WordbookService
         {
             string json;
             lock (_lock) json = JsonSerializer.Serialize(_items, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_path, json);
+            if (!AtomicFile.WriteAllText(_path, json, out var error))
+                App.DebugNote("wordbook: 保存失败 " + error);
         }
-        catch { }
+        catch (Exception ex) { App.DebugNote("wordbook: 保存异常 " + ex.Message); }
     }
 }
