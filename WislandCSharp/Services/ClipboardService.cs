@@ -27,6 +27,10 @@ public interface IClipboardService
 {
     IReadOnlyList<ClipboardEntry> History { get; }
     event EventHandler? Changed;
+
+    /// <summary>保留条数（设置页可改，改后立即裁剪并落盘）。</summary>
+    int MaxItems { get; set; }
+
     /// <summary>绑定窗口句柄（必须在 Start 前调用）。</summary>
     void Initialize(IntPtr hwnd);
     void Start();
@@ -48,9 +52,18 @@ public interface IClipboardService
 /// 剪贴板服务实现：AddClipboardFormatListener 监听剪贴板变化，
 /// 历史记录持久化到 data/clipboard.json（对应 Python clipboard.json）。
 /// </summary>
-public class ClipboardService : IClipboardService
+public class ClipboardService : IClipboardService, IDisposable
 {
     private const int TextMax = 20_000;   // 对应 Python TEXT_MAX
+
+    /// <summary>
+    /// 保留条数的配置键。
+    /// 历史遗留：设置页曾写 <c>clipboard.max_items</c>，而服务读 <c>clipboard.max</c>，
+    /// 导致"改了没反应"。现在统一以 <c>clipboard.max_items</c> 为准，缺省回退旧键，
+    /// 老用户已经存在 max 键里的值不会被丢弃。
+    /// </summary>
+    public const string MaxItemsKey = "clipboard.max_items";
+    private const string LegacyMaxItemsKey = "clipboard.max";
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool AddClipboardFormatListener(IntPtr hwnd);
@@ -61,10 +74,12 @@ public class ClipboardService : IClipboardService
     private readonly string _storePath;
     private readonly List<ClipboardEntry> _history = new();
     private readonly object _lock = new();
+    private readonly IConfigService _config;
+    private readonly EventHandler _configChanged;
     private IntPtr _hwnd;
     private bool _running;
     private int _nextId = 1;
-    private readonly int _max;
+    private int _max;
 
     public event EventHandler? Changed;
 
@@ -73,11 +88,57 @@ public class ClipboardService : IClipboardService
         get { lock (_lock) return _history.ToList(); }
     }
 
+    /// <summary>保留条数：改小会立即裁掉尾部（含图片文件），并落盘。</summary>
+    public int MaxItems
+    {
+        get { lock (_lock) return _max; }
+        set
+        {
+            var v = Math.Clamp(value, 1, 200);
+            lock (_lock)
+            {
+                if (_max == v) return;
+                _max = v;
+                while (_history.Count > _max)
+                {
+                    var dropped = _history[^1];
+                    _history.RemoveAt(_history.Count - 1);
+                    TryDeleteImage(dropped);
+                }
+            }
+            SaveHistory();
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
     public ClipboardService(IConfigService config)
     {
-        _max = Math.Max(1, config.Get("clipboard.max", 10));
+        _config = config;
+        _max = ReadMax(config);
         _storePath = Path.Combine(config.DataDir, "clipboard.json");
         LoadHistory();
+
+        // 设置页改条数后立刻生效（此前只在构造时读一次，改了永远不生效）
+        _configChanged = (_, _) =>
+        {
+            try { MaxItems = ReadMax(_config); }
+            catch (Exception ex) { App.DebugNote("clipboard: 应用条数失败 " + ex.Message); }
+        };
+        config.Changed += _configChanged;
+    }
+
+    /// <summary>读取保留条数：新键优先，回退旧键。</summary>
+    public static int ReadMax(IConfigService config)
+    {
+        var v = config.Get(MaxItemsKey, 0);
+        if (v <= 0) v = config.Get(LegacyMaxItemsKey, 10);
+        return Math.Clamp(v, 1, 200);
+    }
+
+    public void Dispose()
+    {
+        try { _config.Changed -= _configChanged; } catch { }
+        Stop();
     }
 
     public void Initialize(IntPtr hwnd) => _hwnd = hwnd;

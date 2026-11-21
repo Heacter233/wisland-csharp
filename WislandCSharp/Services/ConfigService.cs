@@ -40,7 +40,9 @@ public class ConfigService : IConfigService
         ["island"] = new Dictionary<string, object?>
         {
             ["edge"] = "top", ["pos"] = 0.5, ["screen"] = 0, ["theme"] = "auto",
-            ["hide_fullscreen"] = true, ["hover_expand_ms"] = 220, ["collapse_delay_ms"] = 450,
+            // hover_delay_ms 才是真正生效的键；hover_expand_ms 是早期错写的死键，仅作迁移来源保留
+            ["hide_fullscreen"] = true, ["hover_delay_ms"] = 220, ["hover_expand_ms"] = 220,
+            ["collapse_delay_ms"] = 450,
             ["blur_fps"] = 8, ["default_tab"] = "home", ["expand_mode"] = "hover",
             ["compact_view"] = "clock", ["auto_cycle_s"] = 30, ["passthrough"] = false,
             ["autostart"] = false,
@@ -74,7 +76,8 @@ public class ConfigService : IConfigService
             ["index_base_url"] = "https://index-translate.bilibili.com/v1",
             ["index_model"] = "Index-Translate-35B-A3B",
         },
-        ["clipboard"] = new Dictionary<string, object?> { ["max"] = 10 },
+        // max_items 为正式键（与服务、设置页一致）；max 为旧键，仅用于兼容老配置
+        ["clipboard"] = new Dictionary<string, object?> { ["max_items"] = 10, ["max"] = 10 },
         ["notify"] = new Dictionary<string, object?>
         {
             ["sound"] = new Dictionary<string, object?>
@@ -153,8 +156,61 @@ public class ConfigService : IConfigService
             }
         }
         LoadFromDisk();
+        MigrateClipboardMaxKey();
+        MigrateHoverDelayKey();
         MigrateLiveVadDefaults();
         MigrateEnhanceDefaults();
+    }
+
+    /// <summary>
+    /// 一次性迁移：<c>island.hover_expand_ms</c>（早期写错的死键，全工程无人读）→ <c>island.hover_delay_ms</c>。
+    /// 不迁移的话，老用户调过的悬停延时会被静默忽略。
+    /// </summary>
+    private void MigrateHoverDelayKey()
+    {
+        try
+        {
+            if (!File.Exists(_configPath)) return;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(_configPath));
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
+            if (!doc.RootElement.TryGetProperty("island", out var island)) return;
+            if (island.ValueKind != JsonValueKind.Object) return;
+            if (island.TryGetProperty("hover_delay_ms", out _)) return;      // 已是新键
+            if (!island.TryGetProperty("hover_expand_ms", out var old)) return;
+
+            var v = old.ValueKind == JsonValueKind.Number && old.TryGetInt32(out var n) ? n : 220;
+            Set("island.hover_delay_ms", Math.Clamp(v, 0, 2000), save: false);
+            Save();
+            Debug.WriteLine($"[Config] 悬停延时键名已迁移：hover_expand_ms={v} → hover_delay_ms");
+        }
+        catch (Exception ex) { Debug.WriteLine("[Config] 悬停延时键名迁移失败: " + ex.Message); }
+    }
+
+    /// <summary>
+    /// 一次性迁移：剪贴板条数键名 <c>clipboard.max</c> → <c>clipboard.max_items</c>。
+    /// 设置页写新键、服务读旧键，导致"改了条数永远不生效"。
+    /// 只在"配置文件里确实有旧键、且没有新键"时搬运，避免默认值把用户调过的值盖掉。
+    /// </summary>
+    private void MigrateClipboardMaxKey()
+    {
+        try
+        {
+            if (!File.Exists(_configPath)) return;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(_configPath));
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
+            if (!doc.RootElement.TryGetProperty("clipboard", out var clip)) return;
+            if (clip.ValueKind != JsonValueKind.Object) return;
+            if (clip.TryGetProperty("max_items", out _)) return;      // 已经是新键
+            if (!clip.TryGetProperty("max", out var oldMax)) return;  // 连旧键都没有
+
+            var v = oldMax.ValueKind == JsonValueKind.Number && oldMax.TryGetInt32(out var n) ? n : 10;
+            Set("clipboard.max_items", Math.Clamp(v, 1, 200), save: false);
+            Save();
+            Debug.WriteLine($"[Config] 剪贴板条数键名已迁移：max={v} → max_items={v}");
+        }
+        catch (Exception ex) { Debug.WriteLine("[Config] 剪贴板键名迁移失败: " + ex.Message); }
     }
 
     /// <summary>

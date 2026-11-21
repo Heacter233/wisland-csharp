@@ -18,10 +18,12 @@ public partial class ClipboardPage : UserControl
     public ClipboardPage()
     {
         InitializeComponent();
+        // Tick 只在构造时挂一次：放在 Loaded 里会让每次进页多挂一份（重复 Refresh）
+        _flashTimer.Tick += (_, _) => { _flashTimer.Stop(); _flashId = -1; Refresh(); };
         Loaded += (_, _) =>
         {
+            ServiceHub.Clipboard.Changed -= Clipboard_Changed;
             ServiceHub.Clipboard.Changed += Clipboard_Changed;
-            _flashTimer.Tick += (_, _) => { _flashTimer.Stop(); _flashId = -1; Refresh(); };
             Refresh();
         };
         Unloaded += (_, _) =>

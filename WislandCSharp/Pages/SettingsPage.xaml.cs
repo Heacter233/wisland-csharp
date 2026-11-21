@@ -309,8 +309,8 @@ public partial class SettingsPage : UserControl
         // ===== 剪贴板设置 =====
         var clip = AddSection("剪贴板设置", "自动记录复制过的文本");
 
-        AddCard(clip, CardSlider("剪贴板历史条数", "clipboard.max_items", 5, 50, 1,
-            cfg.Get("clipboard.max_items", 20), v => $"保留 {v} 条"));
+        AddCard(clip, CardSlider("剪贴板历史条数", Services.ClipboardService.MaxItemsKey, 5, 50, 1,
+            cfg.Get(Services.ClipboardService.MaxItemsKey, Services.ClipboardService.ReadMax(cfg)), v => $"保留 {v} 条"));
 
         AddCard(clip, CardSlider("剪贴板轮询间隔", "clipboard.poll_ms", 100, 1000, 50,
             cfg.Get("clipboard.poll_ms", 300), v => $"{v} 毫秒"));
@@ -1277,8 +1277,11 @@ public partial class SettingsPage : UserControl
                     useOpenMeteo: true);
                 break;
 
-            case "clipboard.max_items":
-                cfg.Set(key, int.Parse(value));
+            case Services.ClipboardService.MaxItemsKey:
+                // 键名与服务统一（此前写 max_items、读 max，导致设置完全无效）
+                var maxItems = Math.Clamp(int.TryParse(value, out var mi) ? mi : 20, 1, 200);
+                cfg.Set(key, maxItems);
+                ServiceHub.Clipboard.MaxItems = maxItems;   // 立即裁剪并落盘
                 break;
 
             default:

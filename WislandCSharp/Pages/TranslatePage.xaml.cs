@@ -26,15 +26,18 @@ public partial class TranslatePage : UserControl
         Loaded += OnLoaded;
         Unloaded += (_, _) => Detach();
         _levelTimer.Tick += (_, _) => AnimateLevel();
+
+        // 只在构造时订阅一次：Loaded 会随页面反复显示/隐藏多次触发，
+        // 在 OnLoaded 里 += 会让每次进页都多挂一份闭包（内存与重复执行双累积）。
+        InputBox.TextChanged += (_, _) =>
+        {
+            InputHint.Visibility = InputBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        };
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         Attach();
-        InputBox.TextChanged += (_, _) =>
-        {
-            InputHint.Visibility = InputBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        };
         RefreshListenButton();
         RefreshSubs();
     }
@@ -54,6 +57,7 @@ public partial class TranslatePage : UserControl
         ServiceHub.Live.RunningChanged += OnRunning;
         ServiceHub.Live.DownloadingChanged += OnDownloading;
         if (ServiceHub.Models != null) ServiceHub.Models.Changed += OnModelChanged;
+        if (ServiceHub.Wordbook != null) ServiceHub.Wordbook.Changed += OnWordbookChanged;
     }
 
     private void Detach()
@@ -71,8 +75,19 @@ public partial class TranslatePage : UserControl
         ServiceHub.Live.RunningChanged -= OnRunning;
         ServiceHub.Live.DownloadingChanged -= OnDownloading;
         if (ServiceHub.Models != null) ServiceHub.Models.Changed -= OnModelChanged;
+        if (ServiceHub.Wordbook != null) ServiceHub.Wordbook.Changed -= OnWordbookChanged;
         _levelTimer.Stop();
     }
+
+    /// <summary>
+    /// 单词本变化（标记掌握 / 删除 / 新增）后刷新列表。
+    /// 之前没订阅，点「标记」「删除」后 UI 毫无反应，必须切页再回来才更新。
+    /// </summary>
+    private void OnWordbookChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(new Action(() =>
+    {
+        if (!IsLoaded || PaneWords.Visibility != Visibility.Visible) return;
+        RefreshWords();
+    }), System.Windows.Threading.DispatcherPriority.Background);
 
     // ---------------- 分段 ----------------
     private void Tab_Checked(object sender, RoutedEventArgs e)

@@ -52,7 +52,21 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    /// <summary>NOTIFYICONDATAW 里的 GUID 字段（16 字节；用两个 ulong 表示，blittable 无需封送）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GUID16
+    {
+        public ulong A;
+        public ulong B;
+    }
+
+    /// <summary>
+    /// Shell_NotifyIcon 的 NOTIFYICONDATAW。
+    /// 注意字段顺序/宽度必须与 Windows SDK 完全一致：早期版本把 dwStateMask 写成 IntPtr
+    /// （x64 下多 4 字节）、szInfoTitle 写成 128，导致后续字段整体错位——只用 V1 字段时"碰巧能用"，
+    /// 一旦用气泡/状态标记就会写坏内存。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct NOTIFYICONDATA
     {
         public int cbSize;
@@ -62,15 +76,27 @@ public partial class MainWindow : Window
         public uint uCallbackMessage;
         public IntPtr hIcon;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szTip;
-        public IntPtr dwStateMask;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string szInfo;
-        public uint uTimeout;
         public uint dwState;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szInfoTitle;
+        public uint dwStateMask;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string szInfo;
+        public uint uTimeout;      // 与 uVersion 共用（联合体）
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string szInfoTitle;
+        public uint dwInfoFlags;
+        public GUID16 guidItem;
+        public IntPtr hBalloonIcon;
     }
 
     private const int NimAdd = 0;
     private const int NimDelete = 2;
+
+    /// <summary>托盘图标句柄（退出时要 DestroyIcon，否则泄漏 GDI 句柄）。</summary>
+    private IntPtr _trayIcon = IntPtr.Zero;
+
+    /// <summary>托盘图标是否已成功添加（只有添加过才需要删除）。</summary>
+    private bool _trayAdded;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
     private const uint NifMessage = 0x1;
     private const uint NifIcon = 0x2;
     private const uint NifTip = 0x4;
@@ -115,7 +141,8 @@ public partial class MainWindow : Window
 
     private Backdrop? _backdrop;
     private Border? _host;
-    private bool _dragging;    private DateTime _lastFrame = DateTime.UtcNow;
+    private bool _dragging;
+    private DateTime _lastFrame = DateTime.UtcNow;
 
     [DllImport("user32.dll")]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
@@ -126,17 +153,10 @@ public partial class MainWindow : Window
     private const uint SwpNoRedraw = 0x0008;
 
     private int _glassPx = int.MinValue, _glassPy, _glassPw, _glassPh;
-    private string _blurRgnKey = "";
-    private int _rgnW, _rgnH, _rgnR;
 
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool DeleteObject(IntPtr hObject);
-
-    [DllImport("user32.dll")]
-    private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+    // 说明：曾经用 SetWindowRgn 给窗口做圆角区域（ApplyRoundedWindowRegion）
+    // 和把 DWM 模糊限制在胶囊内（UpdateBlurRegion），实测对 AllowsTransparency 的
+    // 分层窗口不生效（getKind=0），两条路径都是死代码，已连同 P/Invoke 一起删除。
     private DateTime _lastBackdropRequest = DateTime.MinValue;
     private DateTime _lastGlassRefresh = DateTime.MinValue;
     private bool _renderingHooked;
@@ -898,7 +918,6 @@ public partial class MainWindow : Window
                 _chrome.RetargetCompact();
             });
             ServiceHub.Live.FinalZh += (_, s) => Dispatcher.Invoke(() => _compact.SetSegmentZh(s.sid, s.zh));
-            ServiceHub.Live.Level += (_, v) => { };
         });
 
         Try("anchor", () =>
@@ -1702,7 +1721,8 @@ public partial class MainWindow : Window
     // ---------------- 托盘 ----------------
     private void InitializeTray()
     {
-        var icon = LoadAppIcon();
+        if (_trayAdded) return;
+        _trayIcon = LoadAppIcon();
         var nid = new NOTIFYICONDATA
         {
             cbSize = Marshal.SizeOf(typeof(NOTIFYICONDATA)),
@@ -1711,9 +1731,46 @@ public partial class MainWindow : Window
             uFlags = NifIcon | NifTip | NifMessage,
             uCallbackMessage = WmTrayIcon,
             szTip = "wisland 灵动岛",
-            hIcon = icon,
+            hIcon = _trayIcon,
         };
-        Shell_NotifyIcon(NimAdd, ref nid);
+        _trayAdded = Shell_NotifyIcon(NimAdd, ref nid);
+        if (!_trayAdded) App.DebugNote("tray: Shell_NotifyIcon(NIM_ADD) 失败，err=" + Marshal.GetLastWin32Error());
+    }
+
+    /// <summary>
+    /// 移除托盘图标并释放图标句柄。
+    /// 不做这一步的后果：程序退出（尤其被强杀/崩溃）后任务栏留下一枚"幽灵图标"，
+    /// 必须把鼠标划过去才会消失。
+    /// </summary>
+    private void DestroyTray()
+    {
+        if (_trayAdded)
+        {
+            try
+            {
+                var nid = new NOTIFYICONDATA
+                {
+                    cbSize = Marshal.SizeOf(typeof(NOTIFYICONDATA)),
+                    hWnd = _hwnd,
+                    uID = 1,
+                };
+                Shell_NotifyIcon(NimDelete, ref nid);
+            }
+            catch (Exception ex) { App.DebugNote("tray: 删除图标失败 " + ex.Message); }
+            _trayAdded = false;
+        }
+
+        if (_trayIcon != IntPtr.Zero)
+        {
+            try { DestroyIcon(_trayIcon); } catch { }
+            _trayIcon = IntPtr.Zero;
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        DestroyTray();
+        base.OnClosed(e);
     }
 
     private static IntPtr LoadAppIcon()
@@ -1882,9 +1939,10 @@ public partial class MainWindow : Window
         else if (msg == WmTrayIcon)
         {
             var ev = lParam.ToInt32() & 0xFFFF;
-            // WM_RBUTTONUP = 0x0205, WM_LBUTTONUP = 0x0202
-            if (ev is 0x0205 or 0x0204) ShowTrayMenu();
-            else if (ev is 0x0202 or 0x0203) ToggleIsland();
+            // 只认"抬起"事件：早期同时处理 0x0204(RBUTTONDOWN) 与 0x0205(RBUTTONUP)，
+            // 一次右键会弹两遍菜单（第一次被第二次顶掉，表现为菜单闪一下）。
+            if (ev == 0x0205) ShowTrayMenu();          // WM_RBUTTONUP
+            else if (ev == 0x0202) ToggleIsland();     // WM_LBUTTONUP
             handled = true;
         }
         return IntPtr.Zero;
@@ -2213,65 +2271,6 @@ public partial class MainWindow : Window
             SwpNoZorder | SwpNoActivate | SwpNoRedraw);
 
         // 实验：DWM 区域限制（DWM_BB_BLURREGION）能否裁掉窗口矩形级的 accent 模糊
-    }
-
-    /// <summary>
-    /// 把窗口区域切成"圆角矩形"（= 药丸外扩 8px）。
-    ///
-    /// 目的：accent 模糊铺满整个窗口矩形，若窗口是方角，
-    /// 药丸四个角外侧也会被模糊 → 看起来像有个矩形底板。
-    /// 改用圆角窗口区域后，模糊也跟着变成圆角。
-    /// </summary>
-    private void ApplyRoundedWindowRegion(int pw, int ph)
-    {
-        if (_hwnd == IntPtr.Zero || pw < 2 || ph < 2) return;
-
-        var dpi = VisualTreeHelper.GetDpi(this);
-        var scale = Math.Min(dpi.DpiScaleX <= 0 ? 1 : dpi.DpiScaleX,
-                             dpi.DpiScaleY <= 0 ? 1 : dpi.DpiScaleY);
-        var radius = (int)Math.Round((_chrome.BodyCornerRadius + IslandChrome.GlassRegionMargin) * scale);
-        radius = Math.Clamp(radius, 1, Math.Min(pw, ph) / 2);
-
-        if (pw == _rgnW && ph == _rgnH && radius == _rgnR) return;
-
-        var rgn = CreateRoundRectRgn(0, 0, pw + 1, ph + 1, radius * 2, radius * 2);
-        if (rgn == IntPtr.Zero) return;
-        if (SetWindowRgn(_hwnd, rgn, true) == 0)
-        {
-            // 设置失败：区域句柄仍归我们，需自行释放
-            DeleteObject(rgn);
-            return;
-        }
-        _rgnW = pw; _rgnH = ph; _rgnR = radius;
-    }
-
-    /// <summary>
-    /// 把 DWM 模糊限制在胶囊形状内（窗口坐标）。
-    /// 不做的话，窗口四周边距同样会被模糊 → 药丸外出现一圈亮矩形。
-    /// </summary>
-    private void UpdateBlurRegion()
-    {
-        if (_hwnd == IntPtr.Zero) return;
-
-        var body = _chrome.BodyRect;
-        if (body.Width < 1 || body.Height < 1) return;
-
-        var dpi = VisualTreeHelper.GetDpi(this);
-        var sx = dpi.DpiScaleX <= 0 ? 1 : dpi.DpiScaleX;
-        var sy = dpi.DpiScaleY <= 0 ? 1 : dpi.DpiScaleY;
-
-        var x = (int)Math.Round(body.X * sx);
-        var y = (int)Math.Round(body.Y * sy);
-        var w = (int)Math.Round(body.Width * sx);
-        var h = (int)Math.Round(body.Height * sy);
-        var r = (int)Math.Round(_chrome.BodyCornerRadius * Math.Min(sx, sy));
-
-        var key = $"{x},{y},{w},{h},{r}";
-        if (key == _blurRgnKey) return;
-        _blurRgnKey = key;
-
-        var rgn = CreateRoundRectRgn(x, y, x + w + 1, y + h + 1, r * 2, r * 2);
-        SystemBlur.SetBlurRegion(_hwnd, rgn);
     }
 
 

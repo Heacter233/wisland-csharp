@@ -79,6 +79,9 @@ public sealed class MessageInbox
     /// <summary>最多保留多少条。</summary>
     public int Capacity { get; set; } = 50;
 
+    /// <summary>容量上限：防止插件把 Capacity 设成天文数字后无限吃内存。</summary>
+    private const int MaxCapacity = 500;
+
     /// <summary>有新消息或条目变化时触发（可能在非 UI 线程）。</summary>
     public event EventHandler? Changed;
 
@@ -100,8 +103,10 @@ public sealed class MessageInbox
         lock (_lock)
         {
             _items.Insert(0, message);
-            if (_items.Count > Math.Max(1, Capacity))
-                _items.RemoveRange(Capacity, _items.Count - Capacity);
+            // Capacity 可能被插件/配置改成 0 或负数：先夹到合法区间，
+            // 否则 RemoveRange(负数, ...) 会抛 ArgumentOutOfRange（Push 被插件调用时会带崩宿主）。
+            var cap = Math.Clamp(Capacity, 1, MaxCapacity);
+            if (_items.Count > cap) _items.RemoveRange(cap, _items.Count - cap);
         }
         if (notify)
         {

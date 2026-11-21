@@ -81,7 +81,6 @@ public partial class App : Application
             ServiceHub.Models = models;
             ServiceHub.Audio = new AudioService();
             ServiceHub.Brightness = new BrightnessService();
-            _translate = translate;
 
             // 应用主题
             ThemeApplier.ApplyMode(Resources, config.Get("island.theme", "auto"));
@@ -100,30 +99,31 @@ public partial class App : Application
         }
     }
 
-    private ITranslationService? _translate;
-
     protected override void OnExit(ExitEventArgs e)
     {
-        try
-        {
-            // 先卸载插件：让插件在宿主服务还活着时释放资源
-            try { Plugins.PluginLoader.UnloadAll(); } catch { }
-
-            ServiceHub.Clipboard?.Stop();
-            ServiceHub.Hotkey?.UnregisterAll();
-            ServiceHub.Config?.Save();
-            (ServiceHub.Media as IDisposable)?.Dispose();
-            (ServiceHub.Weather as IDisposable)?.Dispose();
-            (ServiceHub.Translate as IDisposable)?.Dispose();
-            (ServiceHub.Live as IDisposable)?.Dispose();
-            ServiceHub.Lyrics?.Dispose();
-            ServiceHub.Audio?.Dispose();
-            ServiceHub.Brightness?.Dispose();
-            (ServiceHub.Notify as IDisposable)?.Dispose();
-            ServiceHub.Radio?.Dispose();
-        }
-        catch { }
+        // 每一步单独 try：早期整段包在一个 try 里，前面任何一步抛异常就会跳过
+        // Config.Save() 与后面的释放，表现为"设置没保存 / 设备没释放"。
+        Step("plugins", () => Plugins.PluginLoader.UnloadAll());
+        Step("clipboard", () => (ServiceHub.Clipboard as IDisposable)?.Dispose());
+        Step("hotkey", () => ServiceHub.Hotkey?.UnregisterAll());
+        Step("config-save", () => ServiceHub.Config?.Save());
+        Step("media", () => (ServiceHub.Media as IDisposable)?.Dispose());
+        Step("weather", () => (ServiceHub.Weather as IDisposable)?.Dispose());
+        Step("translate", () => (ServiceHub.Translate as IDisposable)?.Dispose());
+        Step("live", () => (ServiceHub.Live as IDisposable)?.Dispose());
+        Step("lyrics", () => ServiceHub.Lyrics?.Dispose());
+        Step("audio", () => ServiceHub.Audio?.Dispose());
+        Step("brightness", () => ServiceHub.Brightness?.Dispose());
+        Step("notify", () => (ServiceHub.Notify as IDisposable)?.Dispose());
+        Step("radio", () => ServiceHub.Radio?.Dispose());
         base.OnExit(e);
+    }
+
+    /// <summary>退出链的单个步骤：失败只记日志，不阻断后续释放。</summary>
+    private static void Step(string name, Action action)
+    {
+        try { action(); }
+        catch (Exception ex) { DebugNote($"exit[{name}]: {ex.GetType().Name} {ex.Message}"); }
     }
 
     public static string CrashLogPath => AppPaths.CrashLog;
@@ -135,8 +135,9 @@ public partial class App : Application
         {
             var dir = AppPaths.DataDir;
             Directory.CreateDirectory(dir);
+            // 注意用 "\r\n" 转义；早期写成 `r`n（反引号），日志被写成字面量且全程一行。
             File.AppendAllText(Path.Combine(dir, "debug.log"),
-                $"[{DateTime.Now:HH:mm:ss.fff}] {note}`r`n", Encoding.UTF8);
+                $"[{DateTime.Now:HH:mm:ss.fff}] {note}\r\n", Encoding.UTF8);
         }
         catch { }
     }
