@@ -7,7 +7,7 @@
 <img src="docs/expanded.png" width="420">
 </p>
 
-> **当前版本 v0.2.2**（[Releases](https://github.com/Heacter233/wisland-csharp/releases) 安装包）。
+> **当前版本 v0.2.2**（[Releases0.2.1](https://github.com/Heacter233/wisland-csharp/releases) 安装包）。
 >
 > 本版是一次**面向稳定性、性能与数据安全**的整修：跨 7 个批次处理了代码审查报告里的高危与中等项——
 > 剪贴板设置失效、托盘幽灵图标、实时字幕"幽灵运行"、退出卡 3 秒/闪退、点击磁贴冻结 8 秒、
@@ -16,14 +16,14 @@
 
 ## 下载
 
-到 [Releases](https://github.com/Heacter233/wisland-csharp/releases) 下载 v0.2.2，按「运行库」和「插件版本」两个维度选一个包：
+到 [Releases](https://github.com/Heacter233/wisland-csharp/releases) 下载 v0.2.1，按「运行库」和「插件版本」两个维度选一个包：
 
 | 包 | 大小 | 运行库 | 附带插件 |
 | --- | --- | --- | --- |
-| `wisland-csharp-0.2.2-slim-x64.zip` | ~35 MB | 需要 [.NET 8 桌面运行库](https://dotnet.microsoft.com/download/dotnet/8.0) | 普通版：股票、Clash 控制 |
-| `wisland-csharp-0.2.2-portable-x64.zip` | ~97 MB | **自带 .NET 8 运行库，解压即用** | 普通版：股票、Clash 控制 |
-| `wisland-csharp-0.2.2-ff14-slim-x64.zip` | ~35 MB | 需要 .NET 8 桌面运行库 | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
-| `wisland-csharp-0.2.2-ff14-portable-x64.zip` | ~97 MB | **自带 .NET 8 运行库，解压即用** | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
+| `wisland-csharp-0.2.1-slim-x64.zip` | ~35 MB | 需要 [.NET 8 桌面运行库](https://dotnet.microsoft.com/download/dotnet/8.0) | 普通版：股票、Clash 控制 |
+| `wisland-csharp-0.2.1-portable-x64.zip` | ~97 MB | **自带 .NET 8 运行库，解压即用** | 普通版：股票、Clash 控制 |
+| `wisland-csharp-0.2.1-ff14-slim-x64.zip` | ~35 MB | 需要 .NET 8 桌面运行库 | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
+| `wisland-csharp-0.2.1-ff14-portable-x64.zip` | ~97 MB | **自带 .NET 8 运行库，解压即用** | FF14 专版：股票、Clash + **FF14 招募监控 / 物品价格 / 挖宝悬浮窗** |
 
 > 包体从 v0.2.0 的 7.8 MB 涨到 ~35 MB，是因为内置了 Whisper 的 **Vulkan GPU 运行库**（约 55 MB 中按平台裁剪后）
 > 与 sherpa-onnx 的 ONNX 运行库；没有可用 GPU 时会自动回退 CPU，不影响功能。
@@ -48,7 +48,7 @@
 ## 当前版本：v0.2.2
 
 > 发布日期：2026-11-21 · 本版**没有新功能**，全部是修复与工程化：
-> 按代码审查报告分 7 批处理高危/中等项，每批单独构建验证并提交。
+> 分 7 批处理高危/中等遗留问题项，每批单独构建验证并提交。
 
 ### 修了什么（按批次）
 
