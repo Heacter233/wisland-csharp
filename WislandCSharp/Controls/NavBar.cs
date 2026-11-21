@@ -25,6 +25,16 @@ public sealed class NavBar : FrameworkElement
     private int _hoverIndex = -1;
     private int _dragStart;
 
+    /// <summary>角标红点画笔：预解析并冻结，避免每帧做一次色值字符串解析 + 新建 Brush。</summary>
+    private static readonly Brush BadgeBrush = CreateBadgeBrush();
+
+    private static Brush CreateBadgeBrush()
+    {
+        var b = new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x3A));
+        b.Freeze();
+        return b;
+    }
+
     public Dictionary<string, int> BadgeValues { get; } = new();
     public double Height2 { get; set; } = 36;
 
@@ -82,7 +92,11 @@ public sealed class NavBar : FrameworkElement
         var moving = false;
         foreach (var s in _widths) { s.Step(dt); moving |= !s.Rest; }
         foreach (var s in _hover) { s.Step(dt); moving |= !s.Rest; }
-        InvalidateVisual();
+
+        // 只有真的在动才失效重绘。
+        // 之前无条件 InvalidateVisual() 会让整窗以刷新率重绘（OnFrame→Step→Invalidate→OnFrame 自激励），
+        // 把 IslandChrome 精心做的"静止每 3 帧重绘一次"完全抵消掉。
+        if (moving) InvalidateVisual();
         return moving;
     }
 
@@ -153,7 +167,8 @@ public sealed class NavBar : FrameworkElement
 
             if (BadgeValues.TryGetValue(_items[i].Key, out var n) && n > 0)
             {
-                dc.DrawEllipse(new SolidColorBrush((Color)ColorConverter.ConvertFromString("#ff453a")), null,
+                // 色值预解析：原来每帧对每个角标做一次 ColorConverter.ConvertFromString（字符串解析）
+                dc.DrawEllipse(BadgeBrush, null,
                     new Point(r.X + IconW / 2 + 7, r.Y + 8), 3.2, 3.2);
             }
         }

@@ -32,6 +32,14 @@ public partial class HomePage : UserControl
             try { UpdateLyric(); } catch { }
         };
         _anim.Tick += (_, _) => Pet.InvalidateVisual();
+
+        // 岛收起时页面只是被 Collapsed（不会触发 Unloaded），16ms 宠物动画定时器会一直空转。
+        // 跟随可见性启停：展开且当前页是主页才跑，收起后完全停掉。
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible) { _anim.Start(); _tick.Start(); }
+            else { _anim.Stop(); _tick.Stop(); }
+        };
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)

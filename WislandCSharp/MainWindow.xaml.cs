@@ -1000,6 +1000,8 @@ public partial class MainWindow : Window
             ServiceHub.PopUiLock = key => { _uiLocks.Remove(key); };
             ServiceHub.RequestRetargetHeight = () =>
             {
+                // 高度变了意味着要动画/重排：确保帧循环在跑
+                HookFrameLoop();
                 if (_chrome.IsExpanded) _chrome.RetargetExpandedHeight(CurrentPageHeight() + ChromeExtra);
                 else _chrome.RetargetCompact();
             };
@@ -1244,6 +1246,7 @@ public partial class MainWindow : Window
     protected override void OnMouseEnter(MouseEventArgs e)
     {
         base.OnMouseEnter(e);
+        HookFrameLoop();                 // 指针进入：恢复帧循环（悬停形变/视线跟随需要连续帧）
         _collapseTimer.Stop();
         if (_chrome.IsExpanded || _passthrough) return;
         var mode = ServiceHub.Config.Get("island.expand_mode", "hover");
@@ -1255,6 +1258,7 @@ public partial class MainWindow : Window
     protected override void OnMouseLeave(MouseEventArgs e)
     {
         base.OnMouseLeave(e);
+        HookFrameLoop();                 // 离开时仍要跑几帧把形变/收起动画播完
         _hoverTimer.Stop();
         if (!_chrome.IsExpanded || _passthrough) return;
 
@@ -1467,7 +1471,11 @@ public partial class MainWindow : Window
             if (_chrome.SystemGlass) ApplyAccent(_glassBlurBehind);
         };
         if (_renderingHooked) return;
-        _renderingHooked = true;
+        HookFrameLoop();
+
+        // 帧循环的空闲看门狗（重新拉起被停掉的循环）
+        _frameWatchdog.Tick += (_, _) => WatchdogTick();
+        _frameWatchdog.Start();
 
         _hoverTimer.Tick += (_, _) => { _hoverTimer.Stop(); Expand(); };
         _collapseTimer.Tick += (_, _) => { _collapseTimer.Stop(); Collapse(); };
@@ -1475,7 +1483,63 @@ public partial class MainWindow : Window
         ApplyTimings();
         _clockTimer.Tick += (_, _) => Clock_Tick();
 
+        // DPI：文字渲染用真实缩放（否则高 DPI 下所有自绘文本发虚）
+        ApplyDpiText();
+        DpiChanged += (_, _) => ApplyDpiText();
+    }
+
+    /// <summary>把当前窗口 DPI 同步给自绘文本层。</summary>
+    private void ApplyDpiText()
+    {
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this);
+            Text.PixelsPerDip = dpi.PixelsPerDip > 0 ? dpi.PixelsPerDip : 1.0;
+            _compact.InvalidateVisual();
+            _chrome.InvalidateVisual();
+        }
+        catch { }
+    }
+
+    // ---------------- 帧循环（空闲即停） ----------------
+
+    private int _idleFrames;
+
+    /// <summary>
+    /// 启动渲染帧循环。
+    /// 60fps 常驻唤醒是"常驻挂件"最大的耗电项：一切都静止、鼠标也没动的时候，
+    /// 完全不需要每帧醒来推进弹簧。所以这里做成"按需启动、静止即停"，
+    /// 由输入事件 / 动画 / 定时器重新唤醒。
+    /// </summary>
+    private void HookFrameLoop()
+    {
+        if (_renderingHooked) return;
+        _renderingHooked = true;
+        _idleFrames = 0;
+        _lastFrame = DateTime.UtcNow;
         CompositionTarget.Rendering += OnFrame;
+        App.DebugNote("frame: 恢复渲染循环");
+    }
+
+    private void UnhookFrameLoop()
+    {
+        if (!_renderingHooked) return;
+        _renderingHooked = false;
+        CompositionTarget.Rendering -= OnFrame;
+        App.DebugNote("frame: 空闲，已暂停渲染循环");
+    }
+
+    /// <summary>
+    /// 兜底看门狗：帧循环停掉后，若有"该动却没醒来"的状态（弹簧在动、收起态在播字幕/歌词、
+    /// 有待播提示），就以低频（150ms）把帧循环重新拉起来。
+    /// 这样既能空闲时不占 60fps，又不会因为漏掉某个唤醒点而停在半路。
+    /// </summary>
+    private readonly DispatcherTimer _frameWatchdog = new() { Interval = TimeSpan.FromMilliseconds(150) };
+
+    private void WatchdogTick()
+    {
+        if (_renderingHooked) return;
+        if (_chrome.Animating || _compact.Busy || _notifyQueue.Count > 0 || _dragging) HookFrameLoop();
     }
 
     private void Clock_Tick()
@@ -1533,12 +1597,23 @@ public partial class MainWindow : Window
             _lastBackdropRequest = now;
             _backdrop.Request(ActualWidth > 1 ? ActualWidth : Width, ActualHeight > 1 ? ActualHeight : Height);
         }
+
+        // 空闲判定：所有弹簧静止 + 没有悬停/播报动画 + 不在拖拽 → 连续若干帧后停掉帧循环。
+        // 之后任何输入（鼠标移入、键盘、点击）、动画请求或定时器都会重新 HookFrameLoop。
+        var idle = !moving && !navMoving && !_chrome.Animating
+                   && Math.Abs(_compact.PlayHover) < 0.01
+                   && !_compact.Busy
+                   && _notifyQueue.Count == 0
+                   && !_dragging;
+        if (idle) { if (++_idleFrames > 20) UnhookFrameLoop(); }
+        else _idleFrames = 0;
     }
 
     // ---------------- 展开 / 收起 ----------------
     public void Expand()
     {
         if (_chrome.IsExpanded) return;
+        HookFrameLoop();                 // 展开动画需要连续帧
         _hoverTimer.Stop();
         _collapseTimer.Stop();
         _chrome.ExpandedHeight = () => CurrentPageHeight() + ChromeExtra;
@@ -1574,6 +1649,7 @@ public partial class MainWindow : Window
     public void Collapse()
     {
         if (!_chrome.IsExpanded) return;
+        HookFrameLoop();                 // 收起动画需要连续帧
         _hoverTimer.Stop();
         _collapseTimer.Stop();
         _chrome.Collapse();
@@ -1597,6 +1673,7 @@ public partial class MainWindow : Window
     // ---------------- 窗口拖动 ----------------
     private void BeginDrag()
     {
+        HookFrameLoop();
         _dragging = true;
         try { DragMove(); }
         catch { }
@@ -1639,10 +1716,14 @@ public partial class MainWindow : Window
 
     private Rect WorkAreaDip()
     {
-        var bounds = GetPrimaryWorkAreaPx();
+        // 用「本窗口所在的那块显示器」而不是永远取主屏：
+        // 副屏 / 竖屏 / 混合 DPI 下，取主屏工作区会把岛放到错误的位置。
+        var bounds = WorkAreaPxOfThisWindow();
         var dpi = VisualTreeHelper.GetDpi(this);
         var sx = dpi.DpiScaleX <= 0 ? 1 : dpi.DpiScaleX;
         var sy = dpi.DpiScaleY <= 0 ? 1 : dpi.DpiScaleY;
+
+        // 工作区是物理像素，窗口坐标是 DIP；副屏原点换算要用该屏自身的缩放。
         return new Rect(bounds.Left / sx, bounds.Top / sy, bounds.Width / sx, bounds.Height / sy);
     }
 
@@ -1670,10 +1751,31 @@ public partial class MainWindow : Window
     [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW", CharSet = CharSet.Unicode)]
     private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
 
-    private static RectPx GetPrimaryWorkAreaPx()
+    private static RectPx GetPrimaryWorkAreaPx() => WorkAreaPxOfPoint(0, 0);
+
+    /// <summary>取"本窗口所在显示器"的工作区（物理像素）；窗口还没定位时退回主屏。</summary>
+    private static RectPx WorkAreaPxOfWindow(Window? w)
+    {
+        try
+        {
+            if (w != null && w.IsLoaded && (w.Left != 0 || w.Top != 0))
+            {
+                var dpi = VisualTreeHelper.GetDpi(w);
+                var x = (int)Math.Round((w.Left + w.ActualWidth / 2) * dpi.DpiScaleX);
+                var y = (int)Math.Round((w.Top + w.ActualHeight / 2) * dpi.DpiScaleY);
+                var r = WorkAreaPxOfPoint(x, y);
+                if (r.Width > 0) return r;
+            }
+        }
+        catch { }
+        return GetPrimaryWorkAreaPx();
+    }
+
+    private static RectPx WorkAreaPxOfPoint(int x, int y)
     {
         var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
-        if (GetMonitorInfo(MonitorFromPoint(new POINT { X = 0, Y = 0 }, 2), ref mi) &&
+        // MONITOR_DEFAULTTONEAREST = 2：找不到（或坐标无效）时回落到最近的主屏
+        if (GetMonitorInfo(MonitorFromPoint(new POINT { X = x, Y = y }, 2), ref mi) &&
             mi.rcWork.Right > mi.rcWork.Left)
             return new RectPx
             {
@@ -1682,6 +1784,9 @@ public partial class MainWindow : Window
             };
         return new RectPx { Left = 0, Top = 0, Right = 1920, Bottom = 1080 };
     }
+
+    /// <summary>本窗口所在显示器工作区（物理像素）。</summary>
+    private RectPx WorkAreaPxOfThisWindow() => WorkAreaPxOfWindow(this);
 
     /// <summary>固定窗口尺寸（容纳最大展开态 + 阴影余量）。</summary>
     public const double FixedWindowWidth = 700;
