@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
@@ -81,14 +81,29 @@ public class HotkeyService : IHotkeyService
         }
 
         var id = _nextId++;
-        bool success = NativeMethods.RegisterHotKey(_hwnd, id, modifiers, key);
+
+        // MOD_NOREPEAT：按住热键不连发。
+        // 不加的话按住 Ctrl+Alt+W 会以系统按键重复率疯狂触发 toggle（岛在展开/收起之间抽搐）。
+        // 该标志自 Windows 7 起支持。
+        const uint ModNoRepeat = 0x4000;
+        bool success = NativeMethods.RegisterHotKey(_hwnd, id, modifiers | ModNoRepeat, key);
         if (success)
         {
             _hotkeys[id] = name;
             return true;
         }
+
+        // 注册失败要能被看到：被别的程序占用是最常见原因，静默失败会让用户以为热键没生效
+        var err = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+        LastError = err == 1409
+            ? $"热键 {name} 注册失败：已被其它程序占用（Win32 1409）"
+            : $"热键 {name} 注册失败（Win32 {err}）";
+        try { App.DebugNote("hotkey: " + LastError); } catch { }
         return false;
     }
+
+    /// <summary>最近一次注册失败的原因（null = 没有失败）；设置页/主窗口据此提示。</summary>
+    public string? LastError { get; private set; }
 
     public void Unregister(string name)
     {

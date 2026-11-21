@@ -282,6 +282,7 @@ internal class OpenAiCompatEngine : ITranslationEngine
         using var reader = new StreamReader(stream, Encoding.UTF8);
 
         var sb = new StringBuilder();
+        var sawDone = false;
         while (!reader.EndOfStream)
         {
             ct.ThrowIfCancellationRequested();
@@ -298,11 +299,19 @@ internal class OpenAiCompatEngine : ITranslationEngine
             }
 
             var data = line[5..].Trim();
-            if (data == "[DONE]") break;
+            if (data == "[DONE]") { sawDone = true; break; }
             TryExtractChunk(data, sb, onDelta);
         }
 
         var rawText = sb.ToString();
+
+        // 完整性：既没有 [DONE]、也没有拿到任何有效内容 → 视为断流/截断，交给下一个引擎。
+        // 原实现会把"半个句子"当成功译文返回（SSE 断流时 JSON 解析异常被吞掉），用户看到的是残缺译文。
+        if (rawText.Length == 0)
+            throw new InvalidDataException(sawDone ? "服务端返回空译文" : "流式响应中断且没有内容");
+        if (!sawDone)
+            Debug.WriteLine("[Translate] SSE 未收到 [DONE]，按已收内容处理（可能被截断）");
+
         if (TranslationEngines.LooksLikeExplanation(rawText))
             throw new InvalidDataException("译文包含解释性内容，换下一个引擎");
 

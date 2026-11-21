@@ -2148,9 +2148,23 @@ public partial class MainWindow : Window
             var t = ParseHotkey(ServiceHub.Config.Get("hotkeys.toggle", "Ctrl+Alt+W"));
             var tr = ParseHotkey(ServiceHub.Config.Get("hotkeys.translate", "Ctrl+Alt+I"));
             var cl = ParseHotkey(ServiceHub.Config.Get("hotkeys.clipboard", "Ctrl+Alt+C"));
-            ServiceHub.Hotkey.Register("toggle", t.Mod, t.Vk);
-            ServiceHub.Hotkey.Register("translate", tr.Mod, tr.Vk);
-            ServiceHub.Hotkey.Register("clipboard", cl.Mod, cl.Vk);
+            var results = new[]
+            {
+                (Name: "呼出/收起", Ok: ServiceHub.Hotkey.Register("toggle", t.Mod, t.Vk)),
+                (Name: "翻译", Ok: ServiceHub.Hotkey.Register("translate", tr.Mod, tr.Vk)),
+                (Name: "剪贴板", Ok: ServiceHub.Hotkey.Register("clipboard", cl.Mod, cl.Vk)),
+            };
+
+            // 注册失败不再静默：把原因显示到收起态提示与日志里，
+            // 否则用户只会觉得"热键按了没反应"。
+            var failed = results.Where(r => !r.Ok).ToList();
+            if (failed.Count > 0)
+            {
+                var detail = (ServiceHub.Hotkey as Services.HotkeyService)?.LastError ?? "";
+                var tip = $"热键不可用：{string.Join("、", failed.Select(f => f.Name))}";
+                try { _chrome.SetTicker(tip, null); } catch { }
+                App.DebugNote($"hotkey: {tip}" + (detail.Length > 0 ? $"（{detail}）" : ""));
+            }
         }
         catch (Exception ex) { App.LogCrash("reload-hotkeys", ex); }
     }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Management;
 
 namespace Wisland.Services;
@@ -38,9 +39,12 @@ public sealed class BrightnessService : IDisposable
                 list.Add(Convert.ToInt32(mo["CurrentBrightness"] ?? 0));
                 mo.Dispose();
             }
+
+            var changed = !Available || !Levels.SequenceEqual(list);
             Available = list.Count > 0;
             Levels = list;
-            Changed?.Invoke(this, list);
+            // 亮度没变就不抛事件：原来每 3 秒无条件通知，控制页会跟着白重建一次滑块
+            if (changed) Changed?.Invoke(this, list);
         }
         catch
         {

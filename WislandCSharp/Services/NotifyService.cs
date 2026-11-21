@@ -74,6 +74,18 @@ public sealed class NotifyService : IDisposable
     private volatile bool _busy;
     private bool _primed;
 
+    /// <summary>通知库（含 -wal）最后一次写入时间：用来判断"这一轮到底有没有新东西"。</summary>
+    private long _lastStamp;
+
+    /// <summary>已处理到的最大 ArrivalTime（FILETIME），增量查询用。</summary>
+    private long _lastArrival;
+
+    /// <summary>最近一次读到的 badge 未读数（按来源）。</summary>
+    private readonly Dictionary<string, int> _badges = new();
+
+    /// <summary>增量查询的重叠窗口（FILETIME 单位 = 100ns）：覆盖 WNS 写入与读取的时序错位。</summary>
+    private const long ArrivalOverlap = 10 * 1000 * 1000;   // 1 秒
+
     public event EventHandler<Dictionary<string, int>>? CountsChanged;
     public event EventHandler<NotifyItem>? Notified;
 
@@ -117,10 +129,18 @@ public sealed class NotifyService : IDisposable
     private void PollCore()
     {
         if (!File.Exists(SourceDb)) return;
-        if (!CopySnapshot()) return;
+
+        // 先看通知库有没有被写过：没变就整轮跳过。
+        // 早期每 4 秒无条件整库复制 wpndatabase.db（+wal +shm，可达数 MB）并重解码 200 条 toast，
+        // 空闲时也持续吃 CPU 与 SSD 写入量；现在绝大多数轮次只做一次 stat。
+        var stamp = SourceStamp();
+        if (_primed && stamp == _lastStamp) return;
+        if (!CopySnapshot()) return;      // 正被 WNS 写着，下轮再试
+        _lastStamp = stamp;
 
         var found = new List<NotifyItem>();
         var badges = new Dictionary<string, int>();
+        var maxArrival = _lastArrival;
 
         var cs = new SqliteConnectionStringBuilder
         {
@@ -133,13 +153,15 @@ public sealed class NotifyService : IDisposable
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
-            // ArrivalTime 为 FILETIME；只取最近 3 天，避免历史噪声
+            // ArrivalTime 为 FILETIME；增量读取（带 1 秒重叠去重），上限 200 条兜底
             cmd.CommandText = @"
                 SELECT h.PrimaryId, n.Type, n.Tag, n.ArrivalTime, n.Payload
                 FROM Notification n
                 JOIN NotificationHandler h ON h.RecordId = n.HandlerId
+                WHERE n.ArrivalTime > @since
                 ORDER BY n.ArrivalTime DESC
                 LIMIT 200";
+            cmd.Parameters.AddWithValue("@since", _lastArrival > 0 ? Math.Max(0, _lastArrival - ArrivalOverlap) : 0);
 
             using var reader = cmd.ExecuteReader();
             var cutoff = DateTime.Now.AddDays(-3);
@@ -147,6 +169,8 @@ public sealed class NotifyService : IDisposable
             {
                 var primaryId = reader.IsDBNull(0) ? "" : reader.GetString(0);
                 var arrival = reader.IsDBNull(3) ? 0 : reader.GetInt64(3);
+                if (arrival > maxArrival) maxArrival = arrival;
+
                 var time = FromFileTime(arrival);
                 if (time < cutoff) continue;
 
@@ -169,7 +193,6 @@ public sealed class NotifyService : IDisposable
                 var (title, body) = ParseToast(xml);
                 if (title.Length == 0 && body.Length == 0) continue;
 
-                var key = $"{primaryId}|{arrival}|{title}|{body}";
                 found.Add(new NotifyItem
                 {
                     Kind = kind,
@@ -180,40 +203,67 @@ public sealed class NotifyService : IDisposable
                     Body = body,
                     Time = time,
                 });
-
-                lock (_lock)
-                {
-                    if (_seen.Add(key)) { /* 新条目 */ }
-                }
             }
         }
 
-        // 统计未读：badge 优先，否则统计清除时间之后的 toast
-        var newCounts = new Dictionary<string, int>();
-        foreach (var kind in new[] { "qq", "wechat", "mail" })
+        _lastArrival = maxArrival;
+
+        // 新条目去重（重叠窗口会重复读到上一轮的最后一条）
+        List<NotifyItem> fresh = new();
+        lock (_lock)
         {
-            if (badges.TryGetValue(kind, out var b)) { newCounts[kind] = b; continue; }
-            var cleared = _clearedAt.GetValueOrDefault(kind, DateTime.MinValue);
-            newCounts[kind] = found.Count(f => f.Kind == kind && f.Time > cleared);
+            foreach (var item in found)
+            {
+                var key = $"{item.Time.Ticks}|{item.Kind}|{item.Body}";
+                if (!_seen.Add(key)) continue;                 // 已处理过
+                fresh.Add(item);
+                _history.Add(item);
+            }
+            // 合并后按时间倒序，只留 60 条
+            _history.Sort((a, b) => b.Time.CompareTo(a.Time));
+            if (_history.Count > 60) _history.RemoveRange(60, _history.Count - 60);
+            // _seen 只增不减会长期占内存：清空前先保留当前历史里的键
+            if (_seen.Count > 1000)
+            {
+                _seen.Clear();
+                foreach (var h in _history) _seen.Add($"{h.Time.Ticks}|{h.Kind}|{h.Body}");
+            }
         }
 
-        List<NotifyItem> fresh = new();
+        // 统计未读：badge 优先，否则统计清除时间之后的通知
+        var newCounts = new Dictionary<string, int>();
+        List<NotifyItem> historySnapshot;
+        DateTime clearedQq, clearedWechat, clearedMail;
+        lock (_lock)
+        {
+            foreach (var kv in badges) _badges[kv.Key] = Math.Max(_badges.GetValueOrDefault(kv.Key), kv.Value);
+            historySnapshot = _history.ToList();
+            clearedQq = _clearedAt.GetValueOrDefault("qq", DateTime.MinValue);
+            clearedWechat = _clearedAt.GetValueOrDefault("wechat", DateTime.MinValue);
+            clearedMail = _clearedAt.GetValueOrDefault("mail", DateTime.MinValue);
+        }
+
+        foreach (var kind in new[] { "qq", "wechat", "mail" })
+        {
+            if (_badges.TryGetValue(kind, out var b)) { newCounts[kind] = b; continue; }
+            var cleared = kind switch
+            {
+                "qq" => clearedQq,
+                "wechat" => clearedWechat,
+                _ => clearedMail,
+            };
+            newCounts[kind] = historySnapshot.Count(f => f.Kind == kind && f.Time > cleared);
+        }
+
         Dictionary<string, int>? countsSnapshot = null;
         lock (_lock)
         {
-            var before = new HashSet<string>(_history.Select(h => $"{h.Time.Ticks}|{h.Kind}|{h.Body}"));
-            _history.Clear();
-            _history.AddRange(found.Take(60));
-            fresh = _primed
-                ? found.Where(f => !before.Contains($"{f.Time.Ticks}|{f.Kind}|{f.Body}")).Take(5).ToList()
-                : new List<NotifyItem>();
-            _primed = true;
-
             var changed = !DictEqual(_counts, newCounts);
             foreach (var kv in newCounts) _counts[kv.Key] = kv.Value;
             // 注意：事件必须在锁外触发。UI 线程收到事件后可能回读 Counts（需要这把锁），
             // 在锁内同步 Invoke 会立刻死锁。
             if (changed) countsSnapshot = new Dictionary<string, int>(_counts);
+            if (!_primed) { _primed = true; fresh.Clear(); }   // 首轮只建立基线，不弹提示
         }
 
         if (countsSnapshot != null) CountsChanged?.Invoke(this, countsSnapshot);
@@ -223,6 +273,28 @@ public sealed class NotifyService : IDisposable
             MirrorToInbox(item);
             Notified?.Invoke(this, item);
         }
+    }
+
+    /// <summary>通知库（含 -wal）的最后写入时间 + 大小，用于判断是否需要重新读取。</summary>
+    private long SourceStamp()
+    {
+        try
+        {
+            long stamp = 0;
+            foreach (var path in new[] { SourceDb, SourceDb + "-wal" })
+            {
+                try
+                {
+                    var fi = new FileInfo(path);
+                    if (!fi.Exists) continue;
+                    stamp = unchecked(stamp * 31 + fi.LastWriteTimeUtc.Ticks);
+                    stamp = unchecked(stamp * 31 + fi.Length);
+                }
+                catch { }
+            }
+            return stamp;
+        }
+        catch { return 0; }
     }
 
     private bool CopySnapshot()
@@ -363,16 +435,25 @@ public sealed class NotifyService : IDisposable
     /// <summary>清除某类未读（只清本地计数，不动 Windows 通知中心）。</summary>
     public void Clear(string kind)
     {
-        _clearedAt[kind] = DateTime.Now;
-        lock (_lock) _counts[kind] = 0;
+        // _clearedAt 必须在同一把锁里读写：
+        // 之前轮询线程（Timer）锁外读、UI 线程锁外写，普通 Dictionary 并发读写
+        // 轻则抛 InvalidOperationException（被 Poll 的 catch 吞掉丢数据），重则内部桶损坏。
+        lock (_lock)
+        {
+            _clearedAt[kind] = DateTime.Now;
+            _counts[kind] = 0;
+        }
         CountsChanged?.Invoke(this, new Dictionary<string, int>(Counts));
     }
 
     public void ClearAll()
     {
-        foreach (var kind in new[] { "qq", "wechat", "mail" }) _clearedAt[kind] = DateTime.Now;
         lock (_lock)
+        {
+            var now = DateTime.Now;
+            foreach (var kind in new[] { "qq", "wechat", "mail" }) _clearedAt[kind] = now;
             foreach (var k in _counts.Keys.ToList()) _counts[k] = 0;
+        }
         CountsChanged?.Invoke(this, new Dictionary<string, int>(Counts));
     }
 

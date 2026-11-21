@@ -53,9 +53,18 @@ public class MediaService : IMediaService, IDisposable
     public void Initialize(IntPtr targetHandle)
     {
         _ui = SynchronizationContext.Current;
-        _timer ??= new Timer(async _ => await PollAsync(), null, TimeSpan.Zero,
-            TimeSpan.FromSeconds(PollSeconds));
+        // 定时器回调是 async void 的等价物：上一轮还没跑完（网络/COM 慢）时不能并发再进一轮，
+        // 否则 _manager ??= 会发出两个 RequestAsync、封面重复落盘。
+        _timer ??= new Timer(async _ =>
+        {
+            if (Interlocked.Exchange(ref _polling, 1) == 1) return;
+            try { await PollAsync().ConfigureAwait(false); }
+            catch (Exception ex) { Debug.WriteLine($"[MediaService] timer: {ex.Message}"); }
+            finally { Interlocked.Exchange(ref _polling, 0); }
+        }, null, TimeSpan.Zero, TimeSpan.FromSeconds(PollSeconds));
     }
+
+    private int _polling;
 
     private async Task PollAsync()
     {

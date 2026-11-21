@@ -164,11 +164,17 @@ public class TranslationService : ITranslationService, IDisposable
         text = Normalize(text);
         if (text.Length == 0) return "";
 
+        // 整条链的总超时：单引擎超时只保证"单个"不卡死，
+        // 5 个引擎依次回退最坏情况会累加到一两分钟——字幕场景不能等这么久。
+        using var total = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        total.CancelAfter(TimeSpan.FromSeconds(ChainTimeoutS));
+
         foreach (var engine in TranslationEngines.Chain(_config))
         {
+            if (total.IsCancellationRequested) break;
             try
             {
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(total.Token);
                 linked.CancelAfter(TimeSpan.FromSeconds(PerEngineTimeoutS));
                 var result = await engine.TranslateAsync(text, sourceLang, targetLang, _config,
                     null, linked.Token);
@@ -178,6 +184,11 @@ public class TranslationService : ITranslationService, IDisposable
             {
                 return "";
             }
+            catch (OperationCanceledException)
+            {
+                // 单引擎超时或整链超时：继续下一个引擎（若还有时间）
+                Debug.WriteLine($"[Translate] {engine.Id}: 超时（{PerEngineTimeoutS}s）");
+            }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[Translate] {engine.Id}: {ex.Message}");
@@ -185,6 +196,9 @@ public class TranslationService : ITranslationService, IDisposable
         }
         return "";
     }
+
+    /// <summary>整条回退链的总超时（秒）：实时字幕等不起"五个引擎各自 8 秒"。</summary>
+    private const int ChainTimeoutS = 15;
 
     private static string Normalize(string text)
     {

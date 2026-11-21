@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -6,6 +7,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -66,8 +68,6 @@ public sealed class LyricsService : IDisposable
     private static readonly Regex TsRe = new(@"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]", RegexOptions.Compiled);
     private static readonly Regex CreditRe = new(@"^\s*[^\s:：]{1,12}\s*[:：]", RegexOptions.Compiled);
 
-    private readonly HttpClient _http = new();
-
     /// <summary>
     /// 第三方歌词源（LiriQo / LRCLIB）专用 HttpClient。
     /// 两个服务都要求可识别的 User-Agent（LRCLIB 在其 API 文档里明确要求）。
@@ -87,7 +87,29 @@ public sealed class LyricsService : IDisposable
         return http;
     }
 
-    private readonly Dictionary<string, Lyrics?> _cache = new();
+    /// <summary>缓存上限：一首歌几百字节，200 首足够覆盖一轮听歌且不会无限涨。</summary>
+    private const int CacheLimit = 200;
+
+    /// <summary>歌词缓存：ConcurrentDictionary（多个页面/多个 async 调用会并发读写）+ LRU 上限。</summary>
+    private readonly ConcurrentDictionary<string, Lyrics?> _cache = new();
+
+    /// <summary>事件顺序（用于 LRU 淘汰，值越小越旧）。</summary>
+    private readonly ConcurrentDictionary<string, long> _cacheSeq = new();
+    private long _cacheTick;
+
+    private void CachePut(string key, Lyrics? value)
+    {
+        _cache[key] = value;
+        _cacheSeq[key] = Interlocked.Increment(ref _cacheTick);
+
+        if (_cache.Count <= CacheLimit) return;
+        // 淘汰最旧的一批（按插入顺序），顺带清掉对应的序号表
+        foreach (var pair in _cacheSeq.OrderBy(p => p.Value).Take(_cache.Count - CacheLimit).ToList())
+        {
+            _cache.TryRemove(pair.Key, out _);
+            _cacheSeq.TryRemove(pair.Key, out _);
+        }
+    }
     private readonly HttpClient _api;
 
     public event EventHandler<string>? Ready;
@@ -154,7 +176,7 @@ public sealed class LyricsService : IDisposable
         if (result == null) result = await FetchFromLrclibAsync(m, syncedOnly: false);
         if (result == null) result = await FetchFromLiriQoAsync(m, plainOnly: true);
 
-        _cache[key] = result;
+        CachePut(key, result);
         Ready?.Invoke(this, key);
         return result;
     }
@@ -467,7 +489,7 @@ public sealed class LyricsService : IDisposable
 
     public void Dispose()
     {
-        _http.Dispose();
+        // _lyricsHttp 是 static 共享连接池，故意不在这里 Dispose
         _api.Dispose();
     }
 }

@@ -33,22 +33,62 @@ public partial class App : Application
     }
 
     private static System.Threading.Mutex? _singleInstance;
+    private static System.Threading.EventWaitHandle? _activateEvent;
+
+    /// <summary>第二个实例用来"唤起"已有实例的命名事件。</summary>
+    private const string ActivateEventName = "wisland-activate-instance";
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        // 单实例：重复启动只唤起已有窗口，避免出现多个灵动岛
+        // 单实例：重复启动时唤起已有窗口，避免出现多个灵动岛。
+        // 旧实现只是 Shutdown(0)——用户双击第二次毫无反馈（注释写"只唤起已有窗口"但没有任何唤起手段）。
         try
         {
             _singleInstance = new System.Threading.Mutex(true, "wisland-single-instance", out var isNew);
             if (!isNew)
             {
+                try
+                {
+                    using var existing = System.Threading.EventWaitHandle.OpenExisting(ActivateEventName);
+                    existing.Set();          // 通知已有实例：展开岛
+                }
+                catch (Exception ex) { DebugNote("single-instance: 唤起失败 " + ex.Message); }
                 Shutdown(0);
                 return;
             }
         }
         catch { }
+
+        // 首个实例：起一个后台等待，收到信号就展开岛（回到上次页面）
+        try
+        {
+            _activateEvent = new System.Threading.EventWaitHandle(
+                false, System.Threading.EventResetMode.AutoReset, ActivateEventName);
+            var ev = _activateEvent;
+            _ = Task.Run(() =>
+            {
+                while (true)
+                {
+                    try
+                    {
+                        if (!ev.WaitOne()) break;
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            try
+                            {
+                                MainWindow?.Activate();
+                                ServiceHub.RequestExpand?.Invoke("");
+                            }
+                            catch (Exception ex) { DebugNote("single-instance: 展开失败 " + ex.Message); }
+                        }));
+                    }
+                    catch { break; }
+                }
+            });
+        }
+        catch (Exception ex) { DebugNote("single-instance: 事件创建失败 " + ex.Message); }
 
         try
         {
@@ -116,6 +156,7 @@ public partial class App : Application
         Step("brightness", () => ServiceHub.Brightness?.Dispose());
         Step("notify", () => (ServiceHub.Notify as IDisposable)?.Dispose());
         Step("radio", () => ServiceHub.Radio?.Dispose());
+        Step("activate-event", () => { try { _activateEvent?.Set(); _activateEvent?.Dispose(); } catch { } });
         base.OnExit(e);
     }
 

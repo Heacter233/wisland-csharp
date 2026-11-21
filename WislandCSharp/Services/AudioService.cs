@@ -19,6 +19,9 @@ public sealed class AudioService : IDisposable
     private bool _lastMuted;
     private bool _disposed;
 
+    /// <summary>峰值变化阈值：低于它的抖动不值得唤醒订阅方重绘（约 0.4% 满幅）。</summary>
+    private const double PeakEpsilon = 0.004;
+
     /// <summary>(volume 0..1, muted)</summary>
     public event EventHandler<(double Volume, bool Muted)>? VolumeChanged;
 
@@ -38,10 +41,12 @@ public sealed class AudioService : IDisposable
 
     private void TryInit()
     {
+        IMMDeviceEnumerator? enumerator = null;
+        IMMDevice? device = null;
         try
         {
-            var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-            var hr = enumerator.GetDefaultAudioEndpoint(0 /*eRender*/, 1 /*eMultimedia*/, out var device);
+            enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+            var hr = enumerator.GetDefaultAudioEndpoint(0 /*eRender*/, 1 /*eMultimedia*/, out device);
             if (hr != 0 || device == null) return;
 
             var iidVol = typeof(IAudioEndpointVolume).GUID;
@@ -58,6 +63,13 @@ public sealed class AudioService : IDisposable
         {
             Debug.WriteLine($"[AudioService] init: {ex.Message}");
             Available = false;
+        }
+        finally
+        {
+            // 枚举器与设备对象用完即释放：原实现只 Release 了 _volume/_meter，
+            // 这两个 COM 对象每 250ms 泄漏一次（切默认设备后还会持续失败）。
+            if (device != null) { try { Marshal.ReleaseComObject(device); } catch { } }
+            if (enumerator != null) { try { Marshal.ReleaseComObject(enumerator); } catch { } }
         }
     }
 
@@ -84,9 +96,14 @@ public sealed class AudioService : IDisposable
             }
             if (_meter != null)
             {
+                // 只在"有订阅者 + 电平确有变化"时才抛事件：
+                // 原来每 250ms 无条件触发（哪怕没人听、电平一直是 0），
+                // 订阅方（收起态小形象 / 主页波形）每次都会请求重绘。
                 _meter.GetPeakValue(out var peak);
-                Peak = Math.Clamp((double)peak, 0, 1);
-                PeakChanged?.Invoke(this, Peak);
+                var level = Math.Clamp((double)peak, 0, 1);
+                var changed = Math.Abs(level - Peak) > PeakEpsilon;
+                Peak = level;
+                if (changed && PeakChanged != null) PeakChanged.Invoke(this, level);
             }
         }
         catch { }

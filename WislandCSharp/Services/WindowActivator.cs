@@ -48,7 +48,9 @@ public static class WindowActivator
         if (cls.Contains("IME", StringComparison.OrdinalIgnoreCase)) return true;
         if (cls.Contains("MSCTF", StringComparison.OrdinalIgnoreCase)) return true;
         if (cls is "Shell_TrayWnd" or "Progman" or "WorkerW" or "Shell_SecondaryTrayWnd") return true;
-        if (title is "Default IME" or "MSCTFIME UI" or "Program Manager" or "") return title == "";
+        // 注意：这里必须对列出的标题返回 true。原实现写成 `return title == ""`，
+        // 于是"Default IME / MSCTFIME UI / Program Manager"这些窗口反而被当成有效目标。
+        if (title is "Default IME" or "MSCTFIME UI" or "Program Manager") return true;
         return false;
     }
 
@@ -67,8 +69,10 @@ public static class WindowActivator
 
     private const int GwlExStyle = -20;
     private const int WsExToolWindow = 0x00000080;
+    private const int WsExTopmost = 0x00000008;
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoActivate = 0x0010;
     private const uint SwpShowWindow = 0x0040;
 
     /// <summary>
@@ -187,6 +191,10 @@ public static class WindowActivator
             if (IsIconic(hwnd)) ShowWindow(hwnd, SwRestore);
             else { ShowWindow(hwnd, SwShow); ShowWindow(hwnd, SwRestore); }
 
+            // 临时置顶拿焦点，之后要还原：原实现置顶后从不恢复，
+            // 被唤出的 QQ/微信会永久盖在别的窗口上（用户表现为"点一次磁贴之后它就一直在最前"）。
+            var wasTopmost = (GetWindowLong(hwnd, GwlExStyle) & WsExTopmost) != 0;
+
             SetWindowPos(hwnd, (IntPtr)(-1), 0, 0, 0, 0,
                 SwpNoMove | SwpNoSize | SwpShowWindow);
 
@@ -212,6 +220,18 @@ public static class WindowActivator
 
             var nowVisible = IsWindowVisible(hwnd);
             var isFg = GetForegroundWindow() == hwnd;
+
+            // 还原置顶状态（原本不是置顶的才降回去）
+            if (!wasTopmost)
+            {
+                try
+                {
+                    SetWindowPos(hwnd, (IntPtr)(-2) /*HWND_NOTOPMOST*/, 0, 0, 0, 0,
+                        SwpNoMove | SwpNoSize | SwpNoActivate);
+                }
+                catch { }
+            }
+
             GetWindowRect(hwnd, out var rr);
             var nowArea = Math.Max(0, rr.Right - rr.Left) * Math.Max(0, rr.Bottom - rr.Top);
             detail = (detail.Length > 0 ? detail + " " : "")
